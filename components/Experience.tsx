@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useMemo } from "react";
 import { Canvas } from "@react-three/fiber";
 import {
   Float,
@@ -10,8 +10,10 @@ import {
   Cloud,
   Clouds,
   Preload,
+  useGLTF,
 } from "@react-three/drei";
 import * as THREE from "three";
+import { sampleIslandSurface } from "@/lib/surface";
 import { Island } from "./Island";
 import { Tree } from "./Tree";
 import { Houses } from "./Houses";
@@ -19,10 +21,12 @@ import { Bridges } from "./Bridges";
 import { Grass } from "./Grass";
 import { GrassClumps } from "./GrassClumps";
 import { Flora } from "./Flora";
+import { Fireflies } from "./Fireflies";
 import { Birds } from "./Birds";
 import { Weather } from "./Weather";
 import { SceneRig } from "./SceneRig";
 import type { SceneParams } from "@/lib/weather";
+import type { Stargazer } from "@/lib/stargazers";
 
 // A ring of clouds wrapping the scene so the sky reads full from any angle.
 const CLOUD_LAYOUT = [
@@ -43,17 +47,37 @@ const TREE_BOOST = 1.15;
 const PLATEAU_Y = 6.7 * ISLAND_SCALE;
 const PLATEAU_R = 10 * ISLAND_SCALE;
 
+// Carpets the island top with grass + flowers placed on the REAL surface (a
+// raycast height profile), so coverage reaches the true edge with no bald ground.
+function Plateau({ wind, night }: { wind: number; night: number }) {
+  const { scene } = useGLTF("/models/island.glb");
+  const surface = useMemo(
+    () => sampleIslandSurface(scene, ISLAND_SCALE),
+    [scene],
+  );
+  return (
+    <>
+      <Grass wind={wind} surface={surface} />
+      <GrassClumps wind={wind} count={6} surface={surface} />
+      <Flora radius={PLATEAU_R + 2} surface={surface} />
+      <Fireflies night={night} baseY={PLATEAU_Y - 0.5} radius={PLATEAU_R + 1} height={11} />
+    </>
+  );
+}
+
 export default function Experience({
   stars,
   params,
   highlight = -1,
   fly = false,
+  stargazers = null,
   onSelectHouse,
 }: {
   stars: number;
   params: SceneParams;
   highlight?: number;
   fly?: boolean;
+  stargazers?: Stargazer[] | null;
   onSelectHouse?: (i: number) => void;
 }) {
   // Night factor (lights come on at dusk). Sun disc sits far along the sun dir.
@@ -64,12 +88,25 @@ export default function Experience({
   return (
     <Canvas
       shadows
-      dpr={[1, 1.75]}
+      dpr={[1, 1.5]}
       camera={{ position: [26, 18, 26], fov: 42, near: 0.1, far: 200 }}
       gl={{ antialias: true, powerPreference: "high-performance" }}
     >
       <Suspense fallback={null}>
         <SceneRig params={params} />
+
+        {/* Supplemental fill so the island always reads well — a soft sky-tinted
+            bounce + a gentle cool back-fill opposite the sun, lifted at night. */}
+        <hemisphereLight
+          intensity={0.55 + night * 0.35}
+          color="#fbf0d8"
+          groundColor="#33402c"
+        />
+        <directionalLight
+          position={[-14, 12, -10]}
+          intensity={0.45 + night * 0.25}
+          color="#bcd3ff"
+        />
 
         {/* The sun, sitting where it really is over Sterzing right now. */}
         {params.dayFactor > 0.02 && (
@@ -85,7 +122,7 @@ export default function Experience({
         )}
 
         {/* A full ring of volumetric clouds; greyer + denser when overcast. */}
-        <Clouds material={THREE.MeshBasicMaterial} limit={400}>
+        <Clouds material={THREE.MeshBasicMaterial} texture="/cloud.png" limit={400}>
           {CLOUD_LAYOUT.map((c, i) => (
             <Cloud
               key={i}
@@ -104,9 +141,7 @@ export default function Experience({
 
         <Float speed={1.1} rotationIntensity={0.1} floatIntensity={0.5}>
           <Island snow={params.snow} scale={ISLAND_SCALE} />
-          <Grass wind={params.wind} topY={PLATEAU_Y} radius={PLATEAU_R + 0.5} />
-          <GrassClumps topY={PLATEAU_Y} radius={PLATEAU_R * 0.85} />
-          <Flora topY={PLATEAU_Y} radius={PLATEAU_R} />
+          <Plateau wind={params.wind} night={night} />
           <group position={[0, TREE_Y, 0]} scale={TREE_BOOST}>
             <Tree
               stars={stars}
@@ -119,9 +154,10 @@ export default function Experience({
                 wind={params.wind}
                 highlight={highlight}
                 night={night}
+                stargazers={stargazers}
                 onSelect={onSelectHouse}
               />
-              <Bridges stars={stars} />
+              <Bridges stars={stars} night={night} />
             </Tree>
           </group>
         </Float>
@@ -138,6 +174,7 @@ export default function Experience({
           scale={42 * ISLAND_SCALE}
           blur={2.6}
           far={20}
+          frames={60}
         />
         <Preload all />
       </Suspense>

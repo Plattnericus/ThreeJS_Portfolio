@@ -1,13 +1,16 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useFrame } from "@react-three/fiber";
-import { useGLTF } from "@react-three/drei";
+import { Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
+import gsap from "gsap";
 import { TIER_BUILDING, Tier, tierForIndex } from "@/lib/rarity";
 import { MAX_HOUSES } from "@/lib/layout";
-import { sampleBranchAnchors } from "@/lib/branches";
+import { sampleBranchAnchors, type Anchor } from "@/lib/branches";
 import { buildLantern } from "@/lib/lantern";
+import { nameForIndex } from "@/lib/names";
+import type { Stargazer } from "@/lib/stargazers";
 
 const PACK = "/models/casual_village_buildings_pack.glb";
 const TREE = "/models/tree.glb";
@@ -75,7 +78,9 @@ const TIER_SIZE: Record<Tier, number> = {
   legendary: 1.85,
 };
 
-function useBuildingFactory() {
+type BuildFn = (tier: Tier) => THREE.Group | null;
+
+function useBuildingFactory(): BuildFn {
   const { scene } = useGLTF(PACK);
   return useMemo(() => {
     const geos = new Map<string, { geo: THREE.BufferGeometry; mat: THREE.Material }>();
@@ -105,20 +110,172 @@ function useBuildingFactory() {
   }, [scene]);
 }
 
+// One house: stable geometry (built once), with a GSAP hover glow + scale pop
+// and a floating name label. Hover state is local so only this house re-renders.
+function House({
+  i,
+  anchor,
+  active,
+  night,
+  name,
+  makeBuilding,
+  lanternScene,
+  onSelect,
+  setRef,
+}: {
+  i: number;
+  anchor: Anchor;
+  active: boolean;
+  night: number;
+  name: string;
+  makeBuilding: BuildFn;
+  lanternScene: THREE.Object3D;
+  onSelect?: (i: number) => void;
+  setRef: (i: number, g: THREE.Group | null) => void;
+}) {
+  const tier = tierForIndex(i);
+  const size = TIER_SIZE[tier];
+  const [hovered, setHovered] = useState(false);
+  const innerRef = useRef<THREE.Group>(null);
+
+  // Built once and reused — hover re-renders don't rebuild the meshes.
+  const built = useMemo(() => {
+    const building = makeBuilding(tier);
+    const deckR = size * 1.5;
+    const platform = makePlatform(deckR);
+    // Collect the building's own (cloned) materials so we can brighten just this
+    // house on hover — the shared platform wood is left untouched.
+    const mats: THREE.MeshStandardMaterial[] = [];
+    building?.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        const m = o.material as THREE.MeshStandardMaterial;
+        if (m && "emissiveIntensity" in m) {
+          m.emissive = new THREE.Color("#fff0d6");
+          m.emissiveIntensity = 0;
+          mats.push(m);
+        }
+      }
+    });
+    const la = rand(i) * Math.PI * 2;
+    const lr = deckR * (0.45 + 0.32 * rand(i + 5));
+    return { building, platform, deckR, mats, la, lr };
+  }, [tier, size, makeBuilding, i]);
+
+  // Lantern glow tracks day/night.
+  const lantern = useMemo(
+    () => buildLantern(lanternScene, size * 0.8, LANTERN_ROT, 0.2 + night * 2.2),
+    [lanternScene, size, night],
+  );
+
+  // Hover → brighten (emissive) + a subtle scale pop, eased with GSAP.
+  useEffect(() => {
+    const glow = { v: built.mats[0]?.emissiveIntensity ?? 0 };
+    const t1 = gsap.to(glow, {
+      v: hovered ? 0.45 : 0,
+      duration: 0.3,
+      ease: "power2.out",
+      onUpdate: () => built.mats.forEach((m) => (m.emissiveIntensity = glow.v)),
+    });
+    let t2: gsap.core.Tween | undefined;
+    if (innerRef.current) {
+      const s = hovered ? 1.06 : 1;
+      t2 = gsap.to(innerRef.current.scale, {
+        x: s,
+        y: s,
+        z: s,
+        duration: 0.3,
+        ease: "power2.out",
+      });
+    }
+    return () => {
+      t1.kill();
+      t2?.kill();
+    };
+  }, [hovered, built]);
+
+  const lightsOn = night > 0.04;
+  return (
+    <group
+      ref={(g) => setRef(i, g)}
+      position={anchor.pos}
+      rotation={[0, i * 1.7, 0]}
+      scale={0}
+      onClick={(e) => {
+        if (!active) return;
+        e.stopPropagation();
+        onSelect?.(i);
+      }}
+      onPointerOver={(e) => {
+        if (!active) return;
+        e.stopPropagation();
+        setHovered(true);
+        document.body.style.cursor = "pointer";
+      }}
+      onPointerOut={(e) => {
+        e.stopPropagation();
+        setHovered(false);
+        document.body.style.cursor = "auto";
+      }}
+    >
+      <group ref={innerRef}>
+        {built.platform && <primitive object={built.platform} />}
+        {built.building && <primitive object={built.building} position={[0, 0.04, 0]} />}
+        <group position={[Math.cos(built.la) * built.lr, 0.04, Math.sin(built.la) * built.lr]}>
+          <primitive object={lantern} />
+          {active && lightsOn && i < 10 && (
+            <pointLight
+              color="#ffb765"
+              position={[0, size * 0.45, 0]}
+              intensity={5 * night}
+              distance={size * 4}
+              decay={2}
+            />
+          )}
+        </group>
+        {active && lightsOn && i < 8 && (
+          <pointLight
+            color="#ffc27a"
+            position={[0, size * 0.55, 0]}
+            intensity={7 * night}
+            distance={size * 3.5}
+            decay={2}
+          />
+        )}
+      </group>
+
+      {hovered && active && (
+        <Html
+          position={[0, size * 1.7 + 1.05, 0]}
+          center
+          distanceFactor={9}
+          zIndexRange={[20, 0]}
+          pointerEvents="none"
+          wrapperClass="select-none"
+        >
+          <div className="anim-fade pointer-events-none whitespace-nowrap rounded-full border border-white/15 bg-[#0d141d]/90 px-3 py-1 text-[13px] font-medium text-white shadow-lg shadow-black/40 backdrop-blur-sm">
+            {name}
+            <span className="ml-px text-white/40">↗</span>
+          </div>
+        </Html>
+      )}
+    </group>
+  );
+}
+
 export function Houses({
   stars,
-  wind = 1,
   highlight = -1,
   night = 0,
+  stargazers = null,
   onSelect,
 }: {
   stars: number;
   wind?: number;
   highlight?: number;
   night?: number;
+  stargazers?: Stargazer[] | null;
   onSelect?: (i: number) => void;
 }) {
-  const lightsOn = night > 0.04;
   const makeBuilding = useBuildingFactory();
   const { scene: treeScene } = useGLTF(TREE);
   const { scene: lanternScene } = useGLTF(LANTERN);
@@ -148,75 +305,22 @@ export function Houses({
 
   return (
     <group>
-      {anchors.map((a, i) => {
-        const tier = tierForIndex(i);
-        const size = TIER_SIZE[tier];
-        const building = makeBuilding(tier);
-        const deckR = size * 1.5;
-        const platform = makePlatform(deckR);
-        const lantern = buildLantern(
-          lanternScene,
-          size * 0.8,
-          LANTERN_ROT,
-          0.2 + night * 2.2,
-        );
-        // random-ish spot on the deck
-        const la = rand(i) * Math.PI * 2;
-        const lr = deckR * (0.45 + 0.32 * rand(i + 5));
-        const isOn = i < active;
-        return (
-          <group
-            key={i}
-            ref={(g) => {
-              groups.current[i] = g;
-            }}
-            position={a.pos}
-            rotation={[0, i * 1.7, 0]}
-            scale={0}
-            onClick={(e) => {
-              if (i >= active) return;
-              e.stopPropagation();
-              onSelect?.(i);
-            }}
-            onPointerOver={(e) => {
-              if (i < active) {
-                e.stopPropagation();
-                document.body.style.cursor = "pointer";
-              }
-            }}
-            onPointerOut={() => {
-              document.body.style.cursor = "auto";
-            }}
-          >
-            {platform && <primitive object={platform} />}
-            {building && <primitive object={building} position={[0, 0.04, 0]} />}
-            {/* a small upright lantern randomly on the deck */}
-            <group position={[Math.cos(la) * lr, 0.04, Math.sin(la) * lr]}>
-              <primitive object={lantern} />
-              {/* the lantern emits warm light at night (capped for perf) */}
-              {isOn && lightsOn && i < 10 && (
-                <pointLight
-                  color="#ffb765"
-                  position={[0, size * 0.45, 0]}
-                  intensity={5 * night}
-                  distance={size * 4}
-                  decay={2}
-                />
-              )}
-            </group>
-            {/* warm glow inside the house at night (first few, to bound lights) */}
-            {isOn && lightsOn && i < 8 && (
-              <pointLight
-                color="#ffc27a"
-                position={[0, size * 0.55, 0]}
-                intensity={7 * night}
-                distance={size * 3.5}
-                decay={2}
-              />
-            )}
-          </group>
-        );
-      })}
+      {anchors.map((a, i) => (
+        <House
+          key={i}
+          i={i}
+          anchor={a}
+          active={i < active}
+          night={night}
+          name={stargazers?.[i]?.login ?? nameForIndex(i)}
+          makeBuilding={makeBuilding}
+          lanternScene={lanternScene}
+          onSelect={onSelect}
+          setRef={(idx, g) => {
+            groups.current[idx] = g;
+          }}
+        />
+      ))}
     </group>
   );
 }

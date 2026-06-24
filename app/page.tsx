@@ -125,6 +125,7 @@ export default function Home() {
         params={params}
         highlight={highlight}
         fly={fly}
+        stargazers={stargazers}
         onSelectHouse={setSelected}
       />
       <SearchBar query={search} onQuery={setSearch} match={matchName} />
