@@ -6,7 +6,7 @@ import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { MAX_HOUSES } from "@/lib/layout";
 import { sampleBranchAnchors } from "@/lib/branches";
-import { buildLantern } from "@/lib/lantern";
+import { buildLantern, LANTERN_SIZE } from "@/lib/lantern";
 import { Tier, resolveTier } from "@/lib/rarity";
 import type { Stargazer } from "@/lib/stargazers";
 
@@ -365,8 +365,9 @@ export function Bridges({
       g.quaternion.setFromUnitVectors(X_AXIS, dir);
       g.scale.set(dist / bridge.len, 0.46, 0.54);
       if (lg) {
+        // stand the lantern cleanly on the bridge planks (base on the deck)
         lg.position.copy(mid);
-        lg.position.y += 0.38 + Math.sin(t * 0.8 + k) * 0.015;
+        lg.position.y += 0.04;
       }
     });
   });
@@ -376,7 +377,7 @@ export function Bridges({
   return (
     <group>
       {edges.map(([i, j, isLadder], k) => {
-        const lantern = buildLantern(lanternScene, 0.5, 0, 0.2 + night * 2.2);
+        const lantern = buildLantern(lanternScene, LANTERN_SIZE, 0, 0.2 + night * 2.2);
         return (
           <group key={`${i}-${j}`}>
             <group

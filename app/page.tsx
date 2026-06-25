@@ -6,6 +6,7 @@ import Hud from "@/components/Hud";
 import SettingsMenu, { type ManualDate } from "@/components/SettingsMenu";
 import SearchBar from "@/components/SearchBar";
 import HouseInterior from "@/components/HouseInterior";
+import MemorialSecret from "@/components/MemorialSecret";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import { FlyIcon } from "@/components/Icons";
 import { nameForHouse, type Stargazer } from "@/lib/stargazers";
@@ -36,7 +37,11 @@ export default function Home() {
   const [search, setSearch] = useState("");
   const [fly, setFly] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
+  const [secretOpen, setSecretOpen] = useState(false);
   const [sceneReady, setSceneReady] = useState(false);
+  // Delay the heavy 3D mount briefly so the loader's draw animation plays on a
+  // free main thread first (GLTF parsing otherwise stutters it).
+  const [mountScene, setMountScene] = useState(false);
   const now = new Date();
   const [date, setDate] = useState<ManualDate>({
     year: now.getFullYear(),
@@ -44,6 +49,11 @@ export default function Home() {
     day: now.getDate(),
     hour: 13,
   });
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setMountScene(true), 1300);
+    return () => window.clearTimeout(id);
+  }, []);
 
   useEffect(() => {
     // Poll the repo's star count every minute so new stars grow the tree live.
@@ -125,17 +135,21 @@ export default function Home() {
           sceneReady ? "scale-100 opacity-100 blur-0" : "scale-[1.015] opacity-0 blur-[2px]"
         }`}
       >
-        <Experience
-          stars={stars}
-          params={params}
-          highlight={highlight}
-          fly={fly}
-          stargazers={stargazers}
-          onSelectHouse={setSelected}
-          onReady={() => setSceneReady(true)}
-        />
+        {mountScene && (
+          <Experience
+            stars={stars}
+            params={params}
+            highlight={highlight}
+            fly={fly}
+            stargazers={stargazers}
+            onSelectHouse={setSelected}
+            onFindDove={() => setSecretOpen(true)}
+            onReady={() => setSceneReady(true)}
+          />
+        )}
       </div>
       <LoadingOverlay sceneReady={sceneReady} />
+      {secretOpen && <MemorialSecret onClose={() => setSecretOpen(false)} />}
 
       <div
         className={`transition duration-700 ease-out ${

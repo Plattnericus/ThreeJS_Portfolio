@@ -23,6 +23,7 @@ import { GrassClumps } from "./GrassClumps";
 import { Flora } from "./Flora";
 import { Fireflies } from "./Fireflies";
 import { Birds } from "./Birds";
+import { Dove } from "./Dove";
 import { Weather } from "./Weather";
 import { SceneRig } from "./SceneRig";
 import { Sky } from "./Sky";
@@ -55,6 +56,7 @@ const PLATEAU_R = 10 * ISLAND_SCALE;
 
 const MODEL_ASSETS = [
   "/models/ant.glb",
+  "/models/bird_orange.glb",
   "/models/casual_village_buildings_pack.glb",
   "/models/grass.glb",
   "/models/island.glb",
@@ -107,6 +109,7 @@ export default function Experience({
   fly = false,
   stargazers = null,
   onSelectHouse,
+  onFindDove,
   onReady,
 }: {
   stars: number;
@@ -115,6 +118,7 @@ export default function Experience({
   fly?: boolean;
   stargazers?: Stargazer[] | null;
   onSelectHouse?: (i: number) => void;
+  onFindDove?: () => void;
   onReady?: () => void;
 }) {
   // Night factor (lights come on at dusk). Sun disc sits far along the sun dir.
@@ -184,7 +188,7 @@ export default function Experience({
             />
           ))}
         </Clouds>
-        <Birds count={16} />
+        <Dove onFind={onFindDove} />
 
         <Float speed={1.1} rotationIntensity={0.1} floatIntensity={0.5}>
           <Island snow={params.snow} scale={ISLAND_SCALE} />
@@ -206,6 +210,7 @@ export default function Experience({
               />
               <Bridges stars={stars} night={night} stargazers={stargazers} />
               <Ants stars={stars} stargazers={stargazers} />
+              <Birds count={7} />
             </Tree>
           </group>
         </Float>
@@ -214,6 +219,7 @@ export default function Experience({
           precip={params.precip}
           intensity={params.precipIntensity}
           wind={params.wind}
+          storm={params.storm}
         />
         <Preload all />
       </Suspense>

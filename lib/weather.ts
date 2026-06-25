@@ -48,6 +48,7 @@ export type SceneParams = {
   leafColor: string; // seasonal foliage tint
   snow: number; // 0..1 accumulation on surfaces
   cloud: number; // 0..1 exaggerated cloud cover
+  storm: boolean; // thunderstorm → lightning
 };
 
 // Northern-hemisphere season from month (0-11).
@@ -81,8 +82,14 @@ function sunFromHour(hour: number): { pos: [number, number, number]; day: number
 export function sceneFromWeather(w: Weather): SceneParams {
   const { pos, day } = sunFromHour(w.hour);
 
-  // Exaggerate cloudiness and wind.
-  const cloud = clamp(w.cloud * 1.25, 0, 1);
+  // Exaggerate cloudiness and wind. Rain rarely falls from a clear sky, so any
+  // precipitation forces heavy cover (storms maxed out).
+  const rainy = w.sky === "rain" || w.sky === "storm" || w.sky === "snow";
+  const cloud = clamp(
+    Math.max(w.cloud * 1.25, w.sky === "storm" ? 1 : rainy ? 0.9 : 0),
+    0,
+    1,
+  );
   const wind = clamp(0.4 + (w.windKmh / 30) * 1.6, 0.4, 3.2); // overstimulated
 
   // Day/night base colors.
@@ -132,6 +139,7 @@ export function sceneFromWeather(w: Weather): SceneParams {
     leafColor: LEAF_COLOR[season],
     snow,
     cloud,
+    storm: w.sky === "storm",
   };
 }
 

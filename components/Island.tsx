@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, type ThreeElements } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 
@@ -65,7 +65,7 @@ function grassRockMaterial(snowRef: { current: { value: number } }) {
 export function Island({
   snow = 0,
   ...props
-}: { snow?: number } & JSX.IntrinsicElements["group"]) {
+}: { snow?: number } & ThreeElements["group"]) {
   const { scene } = useGLTF("/models/island.glb");
   const snowU = useRef({ value: 0 });
 

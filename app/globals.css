@@ -1,6 +1,5 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.ts";
 
 :root {
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
@@ -82,4 +81,115 @@ canvas {
   .anim-rise-x {
     animation: none;
   }
+}
+
+/* GitHub-style rendered README (profile <login>/<login> repo).
+   A focused dark subset of github-markdown-css so injected README HTML reads
+   like it does on github.com without pulling in a dependency. */
+.markdown-body {
+  color: #e6edf3;
+  font-size: 14px;
+  line-height: 1.6;
+  word-wrap: break-word;
+}
+.markdown-body a {
+  color: #4493f8;
+  text-decoration: none;
+}
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+.markdown-body img {
+  max-width: 100%;
+  display: inline-block;
+  vertical-align: middle;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 1.2em 0 0.6em;
+  font-weight: 600;
+  line-height: 1.25;
+  color: #f0f6fc;
+}
+.markdown-body h1 {
+  font-size: 1.7em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid #21262d;
+}
+.markdown-body h2 {
+  font-size: 1.35em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid #21262d;
+}
+.markdown-body h3 {
+  font-size: 1.1em;
+}
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body blockquote,
+.markdown-body table {
+  margin: 0 0 1em;
+}
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 2em;
+}
+.markdown-body li {
+  margin: 0.25em 0;
+}
+.markdown-body hr {
+  height: 1px;
+  margin: 1.5em 0;
+  border: 0;
+  background: #21262d;
+}
+.markdown-body blockquote {
+  padding: 0 1em;
+  color: #9198a1;
+  border-left: 0.25em solid #3d444d;
+}
+.markdown-body code {
+  padding: 0.2em 0.4em;
+  margin: 0;
+  font-size: 85%;
+  border-radius: 6px;
+  background: #6e768166;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.markdown-body pre {
+  padding: 16px;
+  overflow: auto;
+  border-radius: 6px;
+  background: #161b22;
+  margin-bottom: 1em;
+}
+.markdown-body pre code {
+  padding: 0;
+  background: transparent;
+  font-size: 90%;
+}
+.markdown-body table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+}
+.markdown-body th,
+.markdown-body td {
+  padding: 6px 13px;
+  border: 1px solid #3d444d;
+}
+.markdown-body tr:nth-child(2n) {
+  background: #161b22;
+}
+.markdown-body [align="center"] {
+  text-align: center;
+}
+.markdown-body .anchor,
+.markdown-body .octicon-link {
+  display: none;
 }

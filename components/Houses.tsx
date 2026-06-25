@@ -8,7 +8,7 @@ import gsap from "gsap";
 import { TIER_BUILDING, Tier, resolveTier } from "@/lib/rarity";
 import { MAX_HOUSES } from "@/lib/layout";
 import { sampleBranchAnchors, type Anchor } from "@/lib/branches";
-import { buildLantern } from "@/lib/lantern";
+import { buildLantern, LANTERN_SIZE } from "@/lib/lantern";
 import { nameForIndex } from "@/lib/names";
 import type { Stargazer } from "@/lib/stargazers";
 
@@ -226,8 +226,8 @@ function House({
 
   // Lantern glow tracks day/night.
   const lantern = useMemo(
-    () => buildLantern(lanternScene, size * 0.8, LANTERN_ROT, 0.2 + night * 2.2),
-    [lanternScene, size, night],
+    () => buildLantern(lanternScene, LANTERN_SIZE, LANTERN_ROT, 0.2 + night * 2.2),
+    [lanternScene, night],
   );
 
   // Hover → brighten (emissive) + a subtle scale pop, eased with GSAP.

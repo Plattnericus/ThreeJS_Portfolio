@@ -7,77 +7,325 @@ import type { Precip } from "@/lib/weather";
 
 const AREA = 34; // half-extent in X/Z
 const TOP = 46;
+const MAX_RAIN = 1600;
+const MAX_SNOW = 900;
 
-// Instanced rain/snow over the scene. Particles recycle within a box so the
-// count stays bounded regardless of how long it runs.
-export function Weather({
-  precip,
-  intensity,
-  wind,
-}: {
-  precip: Precip;
-  intensity: number;
-  wind: number;
-}) {
-  const isSnow = precip === "snow";
-  const count = precip === "none" ? 0 : Math.floor((isSnow ? 700 : 1100) * intensity);
+// Snow — soft drifting points. Fixed-size buffer + draw range so changing the
+// intensity never resizes a GPU attribute (three.js forbids that).
+function Snow({ intensity, wind }: { intensity: number; wind: number }) {
+  const ref = useRef<THREE.Points>(null);
+  const count = Math.max(1, Math.floor(MAX_SNOW * intensity));
 
   const { positions, speeds } = useMemo(() => {
-    const positions = new Float32Array(Math.max(count, 1) * 3);
-    const speeds = new Float32Array(Math.max(count, 1));
-    for (let i = 0; i < count; i++) {
+    const positions = new Float32Array(MAX_SNOW * 3);
+    const speeds = new Float32Array(MAX_SNOW);
+    for (let i = 0; i < MAX_SNOW; i++) {
       positions[i * 3] = (Math.random() - 0.5) * AREA * 2;
       positions[i * 3 + 1] = Math.random() * TOP;
       positions[i * 3 + 2] = (Math.random() - 0.5) * AREA * 2;
-      speeds[i] = (isSnow ? 1.4 : 9) * (0.7 + Math.random() * 0.6);
+      speeds[i] = 1.4 * (0.7 + Math.random() * 0.6);
     }
     return { positions, speeds };
-  }, [count, isSnow]);
-
-  const ref = useRef<THREE.Points>(null);
+  }, []);
 
   useFrame((state, dt) => {
     const pts = ref.current;
-    if (!pts || count === 0) return;
+    if (!pts) return;
     const arr = pts.geometry.attributes.position.array as Float32Array;
     const t = state.clock.elapsedTime;
     for (let i = 0; i < count; i++) {
       const yi = i * 3 + 1;
       arr[yi] -= speeds[i] * dt;
-      // wind pushes along X; snow also drifts on a sine
-      arr[i * 3] += wind * dt * (isSnow ? 1.2 : 2.2);
-      if (isSnow) arr[i * 3] += Math.sin(t + i) * dt * 0.4;
+      arr[i * 3] += wind * dt * 1.2 + Math.sin(t + i) * dt * 0.4;
       if (arr[yi] < -10) {
         arr[yi] = TOP;
         arr[i * 3] = (Math.random() - 0.5) * AREA * 2;
         arr[i * 3 + 2] = (Math.random() - 0.5) * AREA * 2;
-      } else if (arr[i * 3] > AREA) {
-        arr[i * 3] = -AREA;
-      }
+      } else if (arr[i * 3] > AREA) arr[i * 3] = -AREA;
     }
     pts.geometry.attributes.position.needsUpdate = true;
+    pts.geometry.setDrawRange(0, count);
   });
 
-  if (count === 0) return null;
+  return (
+    <points ref={ref} frustumCulled={false}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+      </bufferGeometry>
+      <pointsMaterial size={0.32} color="#ffffff" transparent opacity={0.95} depthWrite={false} sizeAttenuation />
+    </points>
+  );
+}
+
+// Rain — falling streaks (two verts per drop) slanted by the wind. Heavier and
+// faster than snow; opacity/length scale up toward a storm.
+function Rain({ intensity, wind }: { intensity: number; wind: number }) {
+  const ref = useRef<THREE.LineSegments>(null);
+  const count = Math.max(1, Math.floor(MAX_RAIN * Math.max(0.35, intensity)));
+  const len = 1.1 + intensity * 1.6; // streak length
+  const slant = THREE.MathUtils.clamp(wind * 0.5, 0, 2.4);
+
+  const { positions, speeds } = useMemo(() => {
+    const positions = new Float32Array(MAX_RAIN * 6);
+    const speeds = new Float32Array(MAX_RAIN);
+    for (let i = 0; i < MAX_RAIN; i++) {
+      const x = (Math.random() - 0.5) * AREA * 2;
+      const y = Math.random() * TOP;
+      const z = (Math.random() - 0.5) * AREA * 2;
+      positions[i * 6] = x;
+      positions[i * 6 + 1] = y;
+      positions[i * 6 + 2] = z;
+      positions[i * 6 + 3] = x;
+      positions[i * 6 + 4] = y - 1;
+      positions[i * 6 + 5] = z;
+      speeds[i] = 26 * (0.75 + Math.random() * 0.5);
+    }
+    return { positions, speeds };
+  }, []);
+
+  useFrame((_, dt) => {
+    const seg = ref.current;
+    if (!seg) return;
+    const arr = seg.geometry.attributes.position.array as Float32Array;
+    const dx = slant * len * 0.4;
+    for (let i = 0; i < count; i++) {
+      const o = i * 6;
+      let x = arr[o] + wind * dt * 3.2;
+      let y = arr[o + 1] - speeds[i] * dt;
+      const z = arr[o + 2];
+      if (y < -8) {
+        y = TOP + Math.random() * 6;
+        x = (Math.random() - 0.5) * AREA * 2;
+        arr[o + 2] = (Math.random() - 0.5) * AREA * 2;
+      } else if (x > AREA) x = -AREA;
+      arr[o] = x;
+      arr[o + 1] = y;
+      arr[o + 3] = x - dx;
+      arr[o + 4] = y - len;
+      arr[o + 5] = z;
+    }
+    seg.geometry.attributes.position.needsUpdate = true;
+    seg.geometry.setDrawRange(0, count * 2);
+  });
 
   return (
-    <points ref={ref}>
+    <lineSegments ref={ref} frustumCulled={false}>
       <bufferGeometry>
-        <bufferAttribute
-          attach="attributes-position"
-          count={count}
-          array={positions}
-          itemSize={3}
-        />
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
       </bufferGeometry>
-      <pointsMaterial
-        size={isSnow ? 0.32 : 0.14}
-        color={isSnow ? "#ffffff" : "#aac4e0"}
+      <lineBasicMaterial
+        color="#9fc2e8"
         transparent
-        opacity={isSnow ? 0.95 : 0.6}
+        opacity={0.34 + intensity * 0.3}
         depthWrite={false}
-        sizeAttenuation
       />
-    </points>
+    </lineSegments>
+  );
+}
+
+// One puffy cartoon cloud cluster = a few overlapping flattened spheres.
+function makePuffGeometry(seed: number) {
+  const rng = (() => {
+    let s = seed * 9973;
+    return () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  })();
+  const geos: THREE.BufferGeometry[] = [];
+  const puffs = 5 + Math.floor(rng() * 3);
+  for (let i = 0; i < puffs; i++) {
+    const r = 2.4 + rng() * 2.2;
+    const g = new THREE.IcosahedronGeometry(r, 1);
+    g.translate((rng() - 0.5) * 9, (rng() - 0.5) * 1.6, (rng() - 0.5) * 5);
+    g.scale(1, 0.7, 1);
+    geos.push(g);
+  }
+  // simple concat merge (position only) then recompute normals for flat shading
+  let total = 0;
+  geos.forEach((g) => (total += (g.getAttribute("position").array as Float32Array).length));
+  const pos = new Float32Array(total);
+  let off = 0;
+  geos.forEach((g) => {
+    const ng = g.toNonIndexed();
+    const a = ng.getAttribute("position").array as Float32Array;
+    pos.set(a, off);
+    off += a.length;
+  });
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute("position", new THREE.BufferAttribute(pos.subarray(0, off), 3));
+  merged.computeVertexNormals();
+  return merged;
+}
+
+// Dark storm clouds that roll in (cartoon scale-pop + drift) whenever it rains,
+// and flash from within when lightning strikes (driven by `flashRef`).
+function StormClouds({
+  active,
+  flashRef,
+}: {
+  active: boolean;
+  flashRef: React.MutableRefObject<number>;
+}) {
+  const layout = useMemo(
+    () =>
+      Array.from({ length: 6 }, (_, i) => {
+        const ang = (i / 6) * Math.PI * 2 + 0.4;
+        const rad = 16 + (i % 3) * 5;
+        return {
+          geo: makePuffGeometry(i + 1),
+          pos: [Math.cos(ang) * rad, 26 + (i % 2) * 4, Math.sin(ang) * rad] as [number, number, number],
+          phase: i * 1.3,
+          drift: 0.5 + (i % 3) * 0.2,
+        };
+      }),
+    [],
+  );
+  const groups = useRef<(THREE.Group | null)[]>([]);
+  const mat = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: "#5b636e",
+        roughness: 1,
+        metalness: 0,
+        flatShading: true,
+        emissive: new THREE.Color("#eaf2ff"),
+        emissiveIntensity: 0,
+      }),
+    [],
+  );
+
+  useFrame((state, dt) => {
+    const t = state.clock.elapsedTime;
+    mat.emissiveIntensity = flashRef.current * 1.6;
+    for (let i = 0; i < layout.length; i++) {
+      const g = groups.current[i];
+      if (!g) continue;
+      const target = active ? 1 : 0;
+      const s = g.scale.x + (target - g.scale.x) * Math.min(1, dt * 3);
+      g.scale.setScalar(s);
+      const l = layout[i];
+      g.position.x = l.pos[0] + Math.sin(t * 0.07 * l.drift + l.phase) * 4;
+      g.position.y = l.pos[1] + Math.sin(t * 0.4 + l.phase) * 0.6;
+    }
+  });
+
+  return (
+    <group>
+      {layout.map((l, i) => (
+        <group
+          key={i}
+          ref={(g) => {
+            groups.current[i] = g;
+          }}
+          position={l.pos}
+          scale={0.001}
+        >
+          <mesh geometry={l.geo} material={mat} />
+        </group>
+      ))}
+    </group>
+  );
+}
+
+// Lightning — a bright flash (sky-wide light), a glowing forked bolt, and a
+// short after-flicker, fired at random intervals during a storm.
+function Lightning({ flashRef }: { flashRef: React.MutableRefObject<number> }) {
+  const light = useRef<THREE.PointLight>(null);
+  const ambient = useRef<THREE.AmbientLight>(null);
+  const bolt = useRef<THREE.LineSegments>(null);
+  const next = useRef(1.5);
+  const flicker = useRef(0);
+
+  const SEGMENTS = 14;
+  const positions = useMemo(() => new Float32Array(SEGMENTS * 2 * 3), []);
+
+  const strike = (originX: number, originZ: number) => {
+    const arr = positions;
+    let x = originX;
+    let y = 34;
+    const z = originZ;
+    for (let i = 0; i < SEGMENTS; i++) {
+      const nx = x + (Math.random() - 0.5) * 3.2;
+      const ny = y - (34 - 6) / SEGMENTS;
+      arr[i * 6] = x;
+      arr[i * 6 + 1] = y;
+      arr[i * 6 + 2] = z;
+      arr[i * 6 + 3] = nx;
+      arr[i * 6 + 4] = ny;
+      arr[i * 6 + 5] = z + (Math.random() - 0.5) * 2;
+      x = nx;
+      y = ny;
+    }
+    if (bolt.current) {
+      bolt.current.geometry.attributes.position.needsUpdate = true;
+      bolt.current.position.x = 0;
+    }
+    if (light.current) light.current.position.set(originX, 30, originZ);
+  };
+
+  useFrame((state, dt) => {
+    const t = state.clock.elapsedTime;
+    if (t > next.current) {
+      // a strike: main flash + scheduled flicker, then a long-ish gap
+      strike((Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40);
+      flashRef.current = 1;
+      flicker.current = 2;
+      next.current = t + 2.6 + Math.random() * 5;
+    } else if (flicker.current > 0 && flashRef.current < 0.12) {
+      // quick secondary flashes that real lightning has
+      flashRef.current = 0.8;
+      flicker.current -= 1;
+    }
+    // decay the flash
+    flashRef.current = Math.max(0, flashRef.current - dt * 4.5);
+    const f = flashRef.current;
+    if (light.current) light.current.intensity = f * 900;
+    if (ambient.current) ambient.current.intensity = f * 1.4;
+    const m = bolt.current?.material as THREE.LineBasicMaterial | undefined;
+    if (m) m.opacity = f > 0.5 ? 1 : 0;
+  });
+
+  return (
+    <group>
+      <pointLight ref={light} color="#dbe7ff" intensity={0} distance={140} decay={1.4} />
+      <ambientLight ref={ambient} color="#cfe0ff" intensity={0} />
+      <lineSegments ref={bolt} frustumCulled={false}>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        </bufferGeometry>
+        <lineBasicMaterial
+          color="#f4f8ff"
+          transparent
+          opacity={0}
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+          toneMapped={false}
+        />
+      </lineSegments>
+    </group>
+  );
+}
+
+// Top-level weather: precipitation + (for rain) rolling storm clouds and, when
+// it's a thunderstorm, lightning. Snow keeps its gentle drift.
+export function Weather({
+  precip,
+  intensity,
+  wind,
+  storm = false,
+}: {
+  precip: Precip;
+  intensity: number;
+  wind: number;
+  storm?: boolean;
+}) {
+  const flashRef = useRef(0);
+  const isRain = precip === "rain";
+
+  return (
+    <>
+      {precip === "snow" && <Snow intensity={intensity} wind={wind} />}
+      {isRain && <Rain intensity={intensity} wind={wind} />}
+      <StormClouds active={isRain} flashRef={flashRef} />
+      {storm && <Lightning flashRef={flashRef} />}
+    </>
   );
 }

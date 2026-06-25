@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, type ThreeElements } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { animated, useSpring } from "@react-spring/three";
@@ -31,7 +31,7 @@ export function Tree({
   wind?: number;
   leafColor?: string;
   snow?: number;
-} & JSX.IntrinsicElements["group"]) {
+} & ThreeElements["group"]) {
   const { scene } = useGLTF("/models/tree.glb");
   const swayRef = useRef<THREE.Group>(null);
   const leafMats = useRef<THREE.MeshStandardMaterial[]>([]);
