@@ -44,12 +44,14 @@ function grassRockMaterial(snowRef: { current: { value: number } }) {
         `#include <color_fragment>
         float up = clamp(vWNrm.y, 0.0, 1.0);
         float n = vnoise(vWPos*0.6)*0.5 + vnoise(vWPos*2.4)*0.5;
-        vec3 grassA = vec3(0.30,0.50,0.18);
-        vec3 grassB = vec3(0.42,0.62,0.26);
-        vec3 grass = mix(grassA, grassB, n);
-        vec3 rockA = vec3(0.46,0.42,0.36);
-        vec3 rockB = vec3(0.34,0.30,0.27);
-        vec3 rock = mix(rockA, rockB, n);
+        vec3 grassA = vec3(0.22,0.36,0.16);
+        vec3 grassB = vec3(0.40,0.48,0.25);
+        vec3 moss = vec3(0.16,0.26,0.13);
+        vec3 grass = mix(mix(grassA, grassB, n), moss, smoothstep(0.55, 1.0, vnoise(vWPos*1.35))*0.35);
+        vec3 rockA = vec3(0.42,0.38,0.32);
+        vec3 rockB = vec3(0.26,0.24,0.21);
+        vec3 soil = vec3(0.30,0.22,0.15);
+        vec3 rock = mix(mix(rockA, rockB, n), soil, smoothstep(0.3, 0.9, vnoise(vWPos*1.1))*0.42);
         float g = smoothstep(0.45, 0.80, up + (n-0.5)*0.25);
         diffuseColor.rgb = mix(rock, grass, g);
         // snow settles on up-facing surfaces

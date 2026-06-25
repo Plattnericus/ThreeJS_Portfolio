@@ -77,13 +77,16 @@ export function SceneRig({ params }: { params: SceneParams }) {
         intensity={params.sunIntensity}
         color={params.sunColor}
         castShadow
-        shadow-mapSize={[1024, 1024]}
+        shadow-mapSize={[4096, 4096]}
         shadow-camera-near={1}
-        shadow-camera-far={90}
-        shadow-camera-left={-30}
-        shadow-camera-right={30}
-        shadow-camera-top={40}
-        shadow-camera-bottom={-20}
+        shadow-camera-far={70}
+        shadow-camera-left={-18}
+        shadow-camera-right={18}
+        shadow-camera-top={30}
+        shadow-camera-bottom={-16}
+        shadow-radius={4}
+        shadow-bias={-0.0004}
+        shadow-normalBias={0.03}
       />
     </>
   );

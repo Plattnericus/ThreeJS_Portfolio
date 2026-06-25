@@ -57,25 +57,27 @@ export function Grass({
 
   const material = useMemo(() => {
     const m = new THREE.MeshStandardMaterial({
-      color: "#3f7a2c",
+      color: "#355f27",
       roughness: 0.95,
       side: THREE.DoubleSide,
     });
     m.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = uniforms.current.uTime;
       shader.uniforms.uWind = uniforms.current.uWind;
-      shader.uniforms.uTip = { value: new THREE.Color("#bfe07a") };
+      shader.uniforms.uTip = { value: new THREE.Color("#8fae5c") };
       shader.vertexShader =
-        "uniform float uTime;\nuniform float uWind;\nvarying float vH;\n" +
+        "uniform float uTime;\nuniform float uWind;\nattribute float aPhase;\nattribute float aSpeed;\nvarying float vH;\n" +
         shader.vertexShader.replace(
           "#include <begin_vertex>",
           `#include <begin_vertex>
            vH = position.y;
            float bend = position.y * position.y;
-           vec4 wp = instanceMatrix * vec4(0.0,0.0,0.0,1.0);
-           float ph = wp.x * 0.6 + wp.z * 0.5;
-           transformed.x += sin(uTime * 1.4 + ph) * bend * 0.30 * uWind;
-           transformed.z += cos(uTime * 1.1 + ph) * bend * 0.22 * uWind;`,
+           // every blade sways on its OWN phase + speed → individual, smooth
+           // motion with no marching wave (Ghost-of-Tsushima style).
+           float t = uTime * aSpeed + aPhase;
+           float gust = 0.72 + 0.28 * sin(uTime * 0.5 + aPhase * 1.7);
+           transformed.x += sin(t) * bend * 0.34 * uWind * gust;
+           transformed.z += cos(t * 0.85 + aPhase) * bend * 0.20 * uWind * gust;`,
         );
       shader.fragmentShader =
         "uniform vec3 uTip;\nvarying float vH;\n" +
@@ -93,6 +95,8 @@ export function Grass({
     if (!mesh) return;
     const rng = mulberry(424242);
     const color = new THREE.Color();
+    const phases = new Float32Array(count);
+    const speeds = new Float32Array(count);
     const R = surface ? surface.edgeR * 0.99 : radius;
     for (let i = 0; i < count; i++) {
       // uniform disc fill so the whole plateau is covered edge to edge
@@ -112,13 +116,17 @@ export function Grass({
       TMP.scale.set(w, h, w);
       TMP.updateMatrix();
       mesh.setMatrixAt(i, TMP.matrix);
-      color.setHSL(0.25 + rng() * 0.07, 0.5, 0.28 + rng() * 0.16);
+      color.setHSL(0.24 + rng() * 0.06, 0.38, 0.22 + rng() * 0.14);
       mesh.setColorAt(i, color);
+      phases[i] = rng() * Math.PI * 2; // unique phase per blade
+      speeds[i] = 0.8 + rng() * 1.5; // unique speed per blade
     }
+    geom.setAttribute("aPhase", new THREE.InstancedBufferAttribute(phases, 1));
+    geom.setAttribute("aSpeed", new THREE.InstancedBufferAttribute(speeds, 1));
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     mesh.computeBoundingSphere();
-  }, [count, radius, topY, surface]);
+  }, [count, radius, topY, surface, geom]);
 
   useFrame((state) => {
     uniforms.current.uTime.value = state.clock.elapsedTime;

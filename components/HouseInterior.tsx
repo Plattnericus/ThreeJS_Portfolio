@@ -61,7 +61,7 @@ export default function HouseInterior({
   stargazer?: Stargazer | null;
   onClose: () => void;
 }) {
-  const tier = tierForIndex(index);
+  const tier = stargazer?.tier ?? tierForIndex(index);
   const fallbackLogin = stargazer?.login ?? nameForIndex(index);
   const profileUrl = stargazer?.profileUrl ?? `https://github.com/${fallbackLogin}`;
 

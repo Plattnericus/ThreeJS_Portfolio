@@ -5,7 +5,7 @@ import { useFrame } from "@react-three/fiber";
 import { Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import gsap from "gsap";
-import { TIER_BUILDING, Tier, tierForIndex } from "@/lib/rarity";
+import { TIER_BUILDING, Tier, resolveTier } from "@/lib/rarity";
 import { MAX_HOUSES } from "@/lib/layout";
 import { sampleBranchAnchors, type Anchor } from "@/lib/branches";
 import { buildLantern } from "@/lib/lantern";
@@ -22,42 +22,103 @@ function rand(seed: number) {
   return x - Math.floor(x);
 }
 
-// Clean round wooden platform with a little railing (the supplied platform model
-// is a tall weighted contraption, not a flat deck, so we build one). Deck top at
-// y=0 so the house sits on it.
-const WOOD = new THREE.MeshStandardMaterial({
-  color: "#7a5230",
-  roughness: 0.85,
-  flatShading: true,
-});
-const WOOD_DARK = new THREE.MeshStandardMaterial({
-  color: "#553820",
+const WOOD_NOISE = /* glsl */ `
+  float whash(vec3 p){ return fract(sin(dot(p, vec3(17.17, 41.93, 9.71))) * 43758.5453); }
+  float wnoise(vec3 p){
+    vec3 i=floor(p); vec3 f=fract(p); f=f*f*(3.0-2.0*f);
+    return mix(mix(mix(whash(i),whash(i+vec3(1,0,0)),f.x),
+                   mix(whash(i+vec3(0,1,0)),whash(i+vec3(1,1,0)),f.x),f.y),
+               mix(mix(whash(i+vec3(0,0,1)),whash(i+vec3(1,0,1)),f.x),
+                   mix(whash(i+vec3(0,1,1)),whash(i+vec3(1,1,1)),f.x),f.y),f.z);
+  }
+`;
+
+function makeWoodMaterial(base = "#8a572f", dark = "#4c2c17") {
+  const mat = new THREE.MeshStandardMaterial({
+    color: base,
+    roughness: 0.82,
+    metalness: 0,
+  });
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader =
+      "varying vec3 vWoodPos;\n" +
+      shader.vertexShader.replace(
+        "#include <begin_vertex>",
+        "#include <begin_vertex>\n vWoodPos = position;",
+      );
+    shader.fragmentShader =
+      "varying vec3 vWoodPos;\n" +
+      WOOD_NOISE +
+      shader.fragmentShader.replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+        float rings = sin(length(vWoodPos.xz) * 18.0 + wnoise(vWoodPos * 5.0) * 3.0);
+        float grain = wnoise(vec3(vWoodPos.x * 2.4, vWoodPos.y * 9.0, vWoodPos.z * 14.0));
+        float boards = smoothstep(0.025, 0.0, abs(fract(vWoodPos.x * 1.25 + 0.5) - 0.5));
+        vec3 warm = vec3(0.55, 0.33, 0.16);
+        vec3 honey = vec3(0.78, 0.51, 0.25);
+        vec3 deep = vec3(0.27, 0.15, 0.08);
+        vec3 wood = mix(warm, honey, grain * 0.65 + rings * 0.12);
+        wood = mix(wood, deep, boards * 0.42);
+        diffuseColor.rgb = mix(diffuseColor.rgb, wood, 0.88);`,
+      );
+  };
+  return mat;
+}
+
+// Clean round wooden platform with railing. Deck top is y=0 so the house sits
+// on it; the material is procedural wood so all treehouse pieces match.
+const WOOD = makeWoodMaterial();
+const WOOD_DARK = makeWoodMaterial("#56331b", "#24140b");
+const WOOD_GROOVE = new THREE.MeshStandardMaterial({
+  color: "#2f1a0d",
   roughness: 0.9,
 });
 
 function makePlatform(deckR: number): THREE.Group {
   const g = new THREE.Group();
   const deck = new THREE.Mesh(
-    new THREE.CylinderGeometry(deckR, deckR * 0.9, 0.28, 20),
+    new THREE.CylinderGeometry(deckR, deckR * 0.92, 0.34, 36),
     WOOD,
   );
-  deck.position.y = -0.14;
+  deck.position.y = -0.17;
   deck.castShadow = true;
   deck.receiveShadow = true;
   g.add(deck);
 
+  for (let i = -3; i <= 3; i++) {
+    const z = (i / 3.8) * deckR;
+    const chord = Math.sqrt(Math.max(0.1, deckR * deckR - z * z)) * 1.72;
+    const groove = new THREE.Mesh(
+      new THREE.BoxGeometry(chord, 0.018, 0.028),
+      WOOD_GROOVE,
+    );
+    groove.position.set(0, 0.012, z);
+    groove.receiveShadow = true;
+    g.add(groove);
+  }
+
+  const rim = new THREE.Mesh(
+    new THREE.TorusGeometry(deckR * 0.99, 0.055, 8, 36),
+    WOOD_DARK,
+  );
+  rim.rotation.x = Math.PI / 2;
+  rim.position.y = 0.02;
+  rim.castShadow = true;
+  g.add(rim);
+
   const rail = new THREE.Mesh(
-    new THREE.TorusGeometry(deckR * 0.97, 0.045, 6, 22),
+    new THREE.TorusGeometry(deckR * 0.97, 0.05, 8, 36),
     WOOD_DARK,
   );
   rail.rotation.x = Math.PI / 2;
   rail.position.y = 0.5;
   g.add(rail);
 
-  for (let i = 0; i < 9; i++) {
-    const a = (i / 9) * Math.PI * 2;
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
     const post = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.04, 0.04, 0.55, 5),
+      new THREE.CylinderGeometry(0.045, 0.05, 0.58, 6),
       WOOD_DARK,
     );
     post.position.set(
@@ -65,6 +126,7 @@ function makePlatform(deckR: number): THREE.Group {
       0.25,
       Math.sin(a) * deckR * 0.95,
     );
+    post.castShadow = true;
     g.add(post);
   }
   return g;
@@ -115,6 +177,7 @@ function useBuildingFactory(): BuildFn {
 function House({
   i,
   anchor,
+  tier,
   active,
   night,
   name,
@@ -125,6 +188,7 @@ function House({
 }: {
   i: number;
   anchor: Anchor;
+  tier: Tier;
   active: boolean;
   night: number;
   name: string;
@@ -133,7 +197,6 @@ function House({
   onSelect?: (i: number) => void;
   setRef: (i: number, g: THREE.Group | null) => void;
 }) {
-  const tier = tierForIndex(i);
   const size = TIER_SIZE[tier];
   const [hovered, setHovered] = useState(false);
   const innerRef = useRef<THREE.Group>(null);
@@ -171,14 +234,14 @@ function House({
   useEffect(() => {
     const glow = { v: built.mats[0]?.emissiveIntensity ?? 0 };
     const t1 = gsap.to(glow, {
-      v: hovered ? 0.45 : 0,
-      duration: 0.3,
+      v: hovered ? 0.16 : 0, // just a touch brighter, not a flashbang
+      duration: 0.35,
       ease: "power2.out",
       onUpdate: () => built.mats.forEach((m) => (m.emissiveIntensity = glow.v)),
     });
     let t2: gsap.core.Tween | undefined;
     if (innerRef.current) {
-      const s = hovered ? 1.06 : 1;
+      const s = hovered ? 1.03 : 1;
       t2 = gsap.to(innerRef.current.scale, {
         x: s,
         y: s,
@@ -310,6 +373,7 @@ export function Houses({
           key={i}
           i={i}
           anchor={a}
+          tier={resolveTier(i, stargazers)}
           active={i < active}
           night={night}
           name={stargazers?.[i]?.login ?? nameForIndex(i)}

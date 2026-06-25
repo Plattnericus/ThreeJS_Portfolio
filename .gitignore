@@ -24,3 +24,8 @@ next-env.d.ts
 
 # large model backup (keep the optimized ones, not the 81MB source)
 /public/models/tree.original.glb
+
+#AI Slop
+AGENTS.md
+CLAUDE.md
+.claude

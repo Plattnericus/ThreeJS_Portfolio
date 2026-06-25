@@ -147,6 +147,19 @@ all sit at the origin in the file, so we extract each by mesh name and place ind
   **branch tip**, with a gentle bob. Deterministic placement (golden-angle), founders higher.
 - One house per star; expect ~10, so keep counts modest.
 
+## Living Village (ants)
+
+> **IMPLEMENTED.** `components/Ants.tsx` instances `public/models/ant.glb` (single
+> mesh, no rig). Ants are the **villagers**: a couple wander each active house's
+> deck with random, retargeting paths (pick a new random spot on the deck on
+> arrival), and a small **colony climbs the trunk** on a slow helix that wraps at
+> the top. All ants live in the same tree-local space as the houses (rendered
+> inside the `<Tree>` group), instanced as one draw call, oriented to velocity.
+
+- **The ants live in the houses** — they belong to the stargazers' village and
+  wander on/near their deck. Keep counts low (≈2 per house + ~16 climbers) and the
+  ants tiny so they're a charming background detail, not noise.
+
 ## The Floating Island (base)
 
 The whole scene sits on a **floating island** — `public/models/island.glb` (Blender OBJ → glb,

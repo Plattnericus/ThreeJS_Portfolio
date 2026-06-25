@@ -16,7 +16,7 @@ body {
   color: #f4f7f5;
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 main {
