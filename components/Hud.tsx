@@ -17,15 +17,6 @@ export default function Hud({
 }) {
   return (
     <>
-      <div className="anim-rise pointer-events-none absolute left-6 top-5 select-none">
-        <h1 className="text-[15px] font-medium tracking-tight text-white">
-          Star Tree
-        </h1>
-        <p className="mt-0.5 text-[11px] text-white/45">
-          Plattnericus/ThreeJS_Portfolio
-        </p>
-      </div>
-
       {/* Star count — always shown, read-only by default */}
       <div className="anim-rise delay-1 absolute bottom-6 left-6 flex items-center gap-3 rounded-full border border-white/10 bg-white/[0.06] px-4 py-2.5 backdrop-blur-xl">
         {devControls && (

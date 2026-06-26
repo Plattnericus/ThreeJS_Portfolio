@@ -6,21 +6,24 @@ import { useGLTF } from "@react-three/drei";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import * as THREE from "three";
 import { sampleBranchAnchors } from "@/lib/branches";
+import { makeWing, flapAngle } from "@/lib/wing";
 
 const BIRD = "/models/bird_orange.glb";
-const TREE = "/models/tree.glb";
 
-// Tunables (tree-local units). If the bird flies tail-first, flip MODEL_YAW.
+// Tunables (tree-local units). If a bird flies tail-first, flip MODEL_YAW.
 const BIRD_SCALE = 0.5;
 const MODEL_YAW = 0;
-const CRUISE_SPEED = 7.5;
+const CRUISE_SPEED = 7;
 const TURN_RATE = 2.6;
+const WING_COLOR = "#d98a3a";
 
 type State = "cruise" | "toPerch" | "perched" | "launch";
 
 type Bird = {
   obj: THREE.Object3D;
   mixer: THREE.AnimationMixer;
+  wingL: THREE.Group;
+  wingR: THREE.Group;
   pos: THREE.Vector3;
   vel: THREE.Vector3;
   target: THREE.Vector3;
@@ -28,28 +31,13 @@ type Bird = {
   timer: number;
   perchIdx: number;
   rot: THREE.Euler;
-  flapPhase: number;
-  chest: THREE.Object3D | null;
-  spine: THREE.Object3D | null;
+  phase: number;
 };
-
-// The wings are skinned to the Chest/Spine bones (there are no wing bones), so
-// rotating those bones flaps the wing geometry.
-function flapBones(obj: THREE.Object3D) {
-  let chest: THREE.Object3D | null = null;
-  let spine: THREE.Object3D | null = null;
-  obj.traverse((o) => {
-    if (/^Chest_/.test(o.name)) chest = o;
-    else if (/^Spine/.test(o.name)) spine = o;
-  });
-  return { chest, spine };
-}
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
 
-// A flight target in the air around the tree. ~40% of the time it's a far
-// excursion — high and well beyond the island — so birds genuinely fly out of
-// frame and circle back, the way real birds roam.
+// A flight target around the tree. ~40% of the time it's a far, high excursion
+// so birds genuinely fly out of frame and circle back like real birds.
 function roamTarget(out: THREE.Vector3) {
   const a = Math.random() * Math.PI * 2;
   if (Math.random() < 0.4) {
@@ -62,15 +50,15 @@ function roamTarget(out: THREE.Vector3) {
   return out;
 }
 
-export function Birds({ count = 7 }: { count?: number }) {
+export function Birds({ count = 4, stars = 0 }: { count?: number; stars?: number }) {
   const { scene: birdScene, animations } = useGLTF(BIRD);
-  const { scene: treeScene } = useGLTF(TREE);
 
-  const perches = useMemo(
-    () => sampleBranchAnchors(treeScene, 14).map((a) => a.pos),
-    [treeScene],
-  );
+  // Real branch tips the birds can land on (procedural tree, tree-local space).
+  const perches = useMemo(() => sampleBranchAnchors(null, 14).map((a) => a.pos), []);
   const occupied = useRef<Set<number>>(new Set());
+  // Only branches that have actually grown (one per star) are real perches —
+  // otherwise birds "land" on an invisible branch and appear to hover mid-air.
+  const activePerches = Math.min(perches.length, Math.max(0, Math.floor(stars)));
 
   const birds = useMemo<Bird[]>(() => {
     occupied.current = new Set();
@@ -83,10 +71,15 @@ export function Birds({ count = 7 }: { count?: number }) {
         action.play();
         action.time = Math.random() * 5;
       }
-      const { chest, spine } = flapBones(obj);
+      const wingR = makeWing(1, WING_COLOR, "#a85f24", 0.5);
+      const wingL = makeWing(-1, WING_COLOR, "#a85f24", 0.5);
+      wingR.position.set(0.07, 0.4, 0.05);
+      wingL.position.set(-0.07, 0.4, 0.05);
       return {
         obj,
         mixer,
+        wingL,
+        wingR,
         pos: roamTarget(new THREE.Vector3()),
         vel: new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1)).normalize().multiplyScalar(CRUISE_SPEED),
         target: roamTarget(new THREE.Vector3()),
@@ -94,9 +87,7 @@ export function Birds({ count = 7 }: { count?: number }) {
         timer: rand(5, 12),
         perchIdx: -1,
         rot: new THREE.Euler(0, 0, 0, "YXZ"),
-        flapPhase: Math.random() * Math.PI * 2,
-        chest,
-        spine,
+        phase: Math.random() * Math.PI * 2,
       };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -112,7 +103,7 @@ export function Birds({ count = 7 }: { count?: number }) {
 
   const pickPerch = (b: Bird) => {
     const free: number[] = [];
-    for (let i = 0; i < perches.length; i++) if (!occupied.current.has(i)) free.push(i);
+    for (let i = 0; i < activePerches; i++) if (!occupied.current.has(i)) free.push(i);
     if (!free.length) return false;
     const idx = free[Math.floor(Math.random() * free.length)];
     occupied.current.add(idx);
@@ -129,7 +120,6 @@ export function Birds({ count = 7 }: { count?: number }) {
       const b = birds[i];
       const g = wrappers.current[i];
       if (!g) continue;
-
       const flying = b.state !== "perched";
 
       if (b.state === "perched") {
@@ -146,14 +136,12 @@ export function Birds({ count = 7 }: { count?: number }) {
         tmpDir.copy(b.target).sub(b.pos);
         const dist = tmpDir.length();
         tmpDir.normalize();
-
         const speed =
           b.state === "toPerch"
             ? THREE.MathUtils.clamp(dist * 1.8, 0.5, CRUISE_SPEED)
             : b.state === "launch"
               ? CRUISE_SPEED * 1.3
               : CRUISE_SPEED * rand(0.92, 1.12);
-
         tmpSteer.copy(tmpDir).multiplyScalar(speed).sub(b.vel);
         b.vel.addScaledVector(tmpSteer, Math.min(1, TURN_RATE * dt));
         b.pos.addScaledVector(b.vel, dt);
@@ -175,32 +163,30 @@ export function Birds({ count = 7 }: { count?: number }) {
         }
       }
 
-      // orientation: face travel, pitch with climb, bank into turns
+      // face travel, pitch with climb, bank into turns
       const sp = b.vel.length();
       if (sp > 0.05) {
         const yaw = Math.atan2(b.vel.x, b.vel.z) + MODEL_YAW;
-        const pitch = -Math.asin(THREE.MathUtils.clamp(b.vel.y / sp, -1, 1)) * 0.7;
+        const pitch = -Math.asin(THREE.MathUtils.clamp(b.vel.y / sp, -1, 1)) * 0.6;
         let dyaw = yaw - b.rot.y;
         while (dyaw > Math.PI) dyaw -= Math.PI * 2;
         while (dyaw < -Math.PI) dyaw += Math.PI * 2;
         b.rot.y += dyaw * Math.min(1, dt * 6);
         b.rot.x += (pitch - b.rot.x) * Math.min(1, dt * 5);
-        b.rot.z += (THREE.MathUtils.clamp(dyaw * 2.5, -0.6, 0.6) * -1 - b.rot.z) * Math.min(1, dt * 5);
+        b.rot.z += (-dyaw * 2.2 - b.rot.z) * Math.min(1, dt * 5);
       }
 
-      // Play the model's OWN full-body clip (legs, tail, neck, head all move)
-      // FIRST, then flap the wings by rotating the chest/spine the wings are
-      // skinned to — a fast see-saw beat while flying, settling when perched.
-      b.mixer.update(dt * (flying ? 1 : 0.85));
-
-      const wave = Math.sin(t * (flying ? 9 : 2.2) + b.flapPhase);
-      const amp = flying ? 0.22 : 0.04;
-      if (b.chest) b.chest.rotation.z += wave * amp;
-      if (b.spine) b.spine.rotation.z += wave * amp * 0.5;
-
-      // vertical body bob synced to the wing-beat
-      g.position.set(b.pos.x, b.pos.y + (flying ? wave * 0.08 : 0), b.pos.z);
+      // real flapping wings + a body bob synced to the beat
+      const hz = 12;
+      const flap = flapAngle(t, b.phase, flying, hz);
+      b.wingR.rotation.z = flap;
+      b.wingL.rotation.z = -flap;
+      const bob = flying ? Math.sin(t * hz + b.phase) * 0.05 : 0;
+      g.position.set(b.pos.x, b.pos.y + bob, b.pos.z);
       g.rotation.copy(b.rot);
+
+      // model's own clip keeps head/tail/feet alive
+      b.mixer.update(dt * (flying ? 1 : 0.85));
     }
   });
 
@@ -214,6 +200,8 @@ export function Birds({ count = 7 }: { count?: number }) {
           }}
         >
           <primitive object={b.obj} />
+          <primitive object={b.wingL} />
+          <primitive object={b.wingR} />
         </group>
       ))}
     </group>

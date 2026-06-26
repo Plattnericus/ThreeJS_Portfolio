@@ -302,6 +302,18 @@ changes.
 
 ## Art Direction (avoid generic-looking UI)
 
+> **Realism + performance override (2026-06).** The tree (trunk, bark, canopy) is intentionally
+> pushed toward **realism** per the owner's explicit direction, beyond the strict "low-poly /
+> flat-shaded / no photoreal" rule below: an **uneven procedural trunk** (fluted cross-section, root
+> flare, sawn-off branch stubs with **annual-ring** caps), **mottled/blotchy** procedural bark (not
+> streaky), and a **dense** instanced leaf canopy. Houses & bridges are carved fully clear of leaves.
+> The hard constraint is **≥120fps with many stars**, so: keep the canopy ONE instanced draw call
+> kept **out of the shadow passes** (a cheap invisible ellipsoid casts its shadow), cap real-time
+> point lights (most lanterns glow via **emissive only** — `LIT_HOUSES` in `Houses.tsx`, `k < 3` in
+> `Bridges.tsx`), merge house platform sub-meshes, 2048² sun shadow map, and let drei
+> `PerformanceMonitor` auto-scale DPR (`Experience.tsx`). Tune density via the canopy `N` cap and
+> `nestCount` in `components/Tree.tsx`. Don't "correct" these back to flat low-poly.
+
 The look should feel **deliberate and calm**, not like a default template. Concrete rules so the
 build doesn't drift into visual cliché:
 

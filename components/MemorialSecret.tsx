@@ -41,21 +41,22 @@ export default function MemorialSecret({ onClose }: { onClose: () => void }) {
           <span className="memorial-flame-body" />
         </div>
 
-        <p className="text-[11px] uppercase tracking-[0.25em] text-[#d9c79a]/70">
+        <p className="mb-3 text-[11px] uppercase tracking-[0.25em] text-[#d9c79a]/70">
           In liebevoller Erinnerung
         </p>
 
-        <div className="memorial-photo mx-auto mt-4 overflow-hidden rounded-xl border border-[#e7dcc6]/20">
+        {/* the card itself already carries the verse, names and dates */}
+        <div className="memorial-photo mx-auto overflow-hidden rounded-xl border border-[#e7dcc6]/20">
           {imgOk ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={IMAGE_SRC}
-              alt="Franz Plattner"
+              alt="In Erinnerung an Franz Plattner"
               className="block h-full w-full object-contain"
               onError={() => setImgOk(false)}
             />
           ) : (
-            <div className="flex h-full flex-col items-center justify-center gap-2 px-6 py-12 text-center">
+            <div className="flex flex-col items-center justify-center gap-2 px-6 py-16 text-center">
               <p className="text-lg font-medium text-[#f3ead4]">Franz Plattner</p>
               <p className="text-sm text-[#d9c79a]/70">14. Januar 1947 — 25. Juli 2026</p>
               <p className="mt-3 text-[11px] leading-relaxed text-white/40">
@@ -66,16 +67,6 @@ export default function MemorialSecret({ onClose }: { onClose: () => void }) {
             </div>
           )}
         </div>
-
-        <p className="mx-auto mt-5 max-w-[320px] text-[13px] italic leading-relaxed text-[#e9dfca]/80">
-          „Ganz still und leise, ohne ein Wort, gingst du von deinen Lieben fort.
-          Hab tausend Dank für deine Müh’, vergessen werden wir dich nie.“
-        </p>
-
-        <div className="mx-auto mt-5 h-px w-16 bg-[#d9c79a]/25" />
-        <p className="mt-4 text-[12px] tracking-wide text-[#d9c79a]/60">
-          Pfiati und Vergelt’s Gott
-        </p>
       </div>
 
       <style jsx>{`
@@ -94,12 +85,12 @@ export default function MemorialSecret({ onClose }: { onClose: () => void }) {
           animation: memorial-rise 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
         }
         .memorial-photo {
-          width: min(360px, 78vw);
-          max-height: 46vh;
+          width: 100%;
+          max-height: 70vh;
           background: #0c0a08;
         }
         .memorial-photo img {
-          max-height: 46vh;
+          max-height: 70vh;
         }
 
         /* a small, gently flickering candle flame */

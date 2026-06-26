@@ -1,7 +1,7 @@
 import * as THREE from "three";
 
 // One uniform lantern size everywhere (decks + bridges) so they all match.
-export const LANTERN_SIZE = 1.15;
+export const LANTERN_SIZE = 1.45;
 
 // Clone the lantern model, make it glow warmly (emissive), and normalize it to
 // `target` (by its largest dimension) with the base at y=0. `rotX` lets callers

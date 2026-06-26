@@ -60,9 +60,9 @@ export function seasonFromMonth(month: number): Season {
 }
 
 const LEAF_COLOR: Record<Season, string> = {
-  spring: "#86c34a",
-  summer: "#5aa238",
-  autumn: "#cc7a2b",
+  spring: "#92d64e",
+  summer: "#67bd38",
+  autumn: "#e0892f",
   winter: "#9fb0a6",
 };
 
@@ -92,9 +92,9 @@ export function sceneFromWeather(w: Weather): SceneParams {
   );
   const wind = clamp(0.4 + (w.windKmh / 30) * 1.6, 0.4, 3.2); // overstimulated
 
-  // Day/night base colors.
+  // Day/night base colors. Day sky is a more vibrant blue so clear days pop.
   const nightSky = new THREE.Color("#1b2740");
-  const daySky = new THREE.Color("#bcd9e8");
+  const daySky = new THREE.Color("#7ec3ec");
   const overcast = new THREE.Color("#9aa7ad");
   let sky = nightSky.clone().lerp(daySky, day);
   sky.lerp(overcast, cloud * 0.7); // clouds wash it grey
@@ -118,15 +118,16 @@ export function sceneFromWeather(w: Weather): SceneParams {
   const snow =
     precip === "snow" ? 0.9 : season === "winter" ? 0.45 : 0;
 
-  const sunIntensity = lerp(0.15, 2.0, day) * lerp(1, 0.35, cloud);
+  // Brighter, warmer sun on clear days for a punchier, more vibrant daytime.
+  const sunIntensity = lerp(0.15, 2.45, day) * lerp(1, 0.42, cloud);
   const sunColor =
-    day < 0.25 ? "#ffb27a" : cloud > 0.6 ? "#cfd6da" : "#fff4e0";
+    day < 0.25 ? "#ffb27a" : cloud > 0.6 ? "#cfd6da" : "#fff3da";
 
   return {
     sunPos: pos,
     sunIntensity,
     sunColor,
-    ambient: lerp(0.25, 0.6, day) + cloud * 0.1,
+    ambient: lerp(0.28, 0.66, day) + cloud * 0.1,
     skyColor: "#" + sky.getHexString(),
     fogColor: "#" + sky.clone().lerp(new THREE.Color("#ffffff"), 0.1).getHexString(),
     fogNear: fogThick ? 22 : 45,

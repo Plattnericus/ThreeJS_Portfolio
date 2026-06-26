@@ -7,22 +7,15 @@ import * as THREE from "three";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { MAX_HOUSES } from "@/lib/layout";
 import { sampleBranchAnchors } from "@/lib/branches";
-import { resolveTier, Tier } from "@/lib/rarity";
+import { deckRadius } from "@/lib/rarity";
 import type { Stargazer } from "@/lib/stargazers";
 
 const ANT = "/models/ant.glb";
-const TREE = "/models/tree.glb";
 const DECK = 0.35;
 const PER_HOUSE = 4; // animated villager ants wandering each house
 const TRUNK = 26; // a small animated colony climbing the tree
 const ANT_LEN = 1.16;
 
-const TIER_SIZE: Record<Tier, number> = {
-  common: 0.95,
-  uncommon: 1.2,
-  rare: 1.5,
-  legendary: 1.85,
-};
 
 type Ant =
   | {
@@ -66,11 +59,7 @@ export function Ants({
   stargazers?: Stargazer[] | null;
 }) {
   const { scene: antScene, animations } = useGLTF(ANT);
-  const { scene: treeScene } = useGLTF(TREE);
-  const anchors = useMemo(
-    () => sampleBranchAnchors(treeScene, MAX_HOUSES),
-    [treeScene],
-  );
+  const anchors = useMemo(() => sampleBranchAnchors(null, MAX_HOUSES), []);
   const active = Math.min(anchors.length, Math.max(0, Math.floor(stars)));
 
   const ants = useMemo<Ant[]>(() => {
@@ -169,7 +158,7 @@ export function Ants({
           continue;
         }
 
-        const deckR = TIER_SIZE[resolveTier(h, stargazers)] * 1.5 * 0.78;
+        const deckR = deckRadius(h, stargazers) * 0.78;
 
         if (ant.mode === "inside") {
           ant.wait -= d;

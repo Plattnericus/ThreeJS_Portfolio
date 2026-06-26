@@ -1,12 +1,13 @@
 "use client";
 
-import { Suspense, useMemo, useRef } from "react";
+import { Suspense, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import {
   Float,
   OrbitControls,
   Cloud,
   Clouds,
+  PerformanceMonitor,
   Preload,
   useGLTF,
   useTexture,
@@ -44,12 +45,12 @@ const CLOUD_LAYOUT = [
   { pos: [34, 33, 42], bounds: [24, 7, 12], volume: 18, growth: 8 },
   { pos: [-22, 28, 50], bounds: [22, 6, 11], volume: 17, growth: 7 },
   { pos: [-54, 31, 30], bounds: [20, 6, 11], volume: 16, growth: 7 },
-  { pos: [0, 16, 34], bounds: [18, 4, 8], volume: 11, growth: 6 },
+  { pos: [0, 26, 44], bounds: [18, 4, 8], volume: 9, growth: 6 },
 ] as const;
 
 // Island shrunk ~20%; the tree/grass sit on its (now lower) plateau.
 const ISLAND_SCALE = 0.8;
-const TREE_Y = 6.8 * ISLAND_SCALE;
+const TREE_Y = 7.35 * ISLAND_SCALE;
 const TREE_BOOST = 1.15;
 const PLATEAU_Y = 6.7 * ISLAND_SCALE;
 const PLATEAU_R = 10 * ISLAND_SCALE;
@@ -64,7 +65,6 @@ const MODEL_ASSETS = [
   "/models/stylized_lantern.glb",
   "/models/suspension_bridge.glb",
   "/models/tiny_isometric_room.glb",
-  "/models/tree.glb",
   "/models/weighted_wood_platform.glb",
 ];
 
@@ -125,23 +125,35 @@ export default function Experience({
   const night = Math.min(1, Math.max(0, 1 - params.dayFactor * 1.5));
   const sunDir = new THREE.Vector3(...params.sunPos).normalize();
   const sunFar = sunDir.multiplyScalar(120);
+  // Resolution auto-scales to hold the framerate (PerformanceMonitor below).
+  const [dpr, setDpr] = useState(1.5);
 
   return (
     <Canvas
       shadows="soft"
-      dpr={[1, 1.5]}
+      dpr={dpr}
       camera={{ position: [26, 18, 26], fov: 42, near: 0.1, far: 200 }}
       gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
       onCreated={({ gl }) => {
         gl.shadowMap.enabled = true;
         gl.shadowMap.type = THREE.PCFSoftShadowMap;
         gl.toneMapping = THREE.ACESFilmicToneMapping;
-        gl.toneMappingExposure = 1.08;
+        gl.toneMappingExposure = 1.14;
         gl.outputColorSpace = THREE.SRGBColorSpace;
       }}
     >
       <Suspense fallback={null}>
         <AssetGate />
+        {/* Hold a high framerate by trading resolution: drop dpr when fps sags,
+            restore it when it recovers (no AdaptiveDpr — autorotate would pin it
+            regressed). */}
+        <PerformanceMonitor
+          bounds={() => [90, 140]}
+          flipflops={4}
+          onDecline={() => setDpr((d) => Math.max(0.85, +(d - 0.2).toFixed(2)))}
+          onIncline={() => setDpr((d) => Math.min(1.5, +(d + 0.2).toFixed(2)))}
+          onFallback={() => setDpr(0.85)}
+        />
         <SceneReadySignal onReady={onReady} />
         <SceneRig params={params} />
         <Sky params={params} />
@@ -183,7 +195,7 @@ export default function Experience({
               volume={c.volume}
               growth={c.growth}
               color={params.cloud > 0.5 ? "#c5ccd0" : "#f2f0e8"}
-              opacity={0.58 + params.cloud * 0.34}
+              opacity={0.34 + params.cloud * 0.24}
               speed={0.06 + params.wind * 0.02}
             />
           ))}
@@ -199,6 +211,7 @@ export default function Experience({
               wind={params.wind}
               leafColor={params.leafColor}
               snow={params.snow}
+              stargazers={stargazers}
             >
               <Houses
                 stars={stars}
@@ -210,7 +223,7 @@ export default function Experience({
               />
               <Bridges stars={stars} night={night} stargazers={stargazers} />
               <Ants stars={stars} stargazers={stargazers} />
-              <Birds count={7} />
+              <Birds count={4} stars={stars} />
             </Tree>
           </group>
         </Float>

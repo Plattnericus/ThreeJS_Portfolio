@@ -157,6 +157,23 @@ export default function LoadingOverlay({ sceneReady }: { sceneReady: boolean }) 
     "--load": `${Math.min(100, displayProgress)}%`,
   };
 
+  // Status line that advances cleanly with progress (each change fades in).
+  const statusMessages = [
+    "Loading assets…",
+    "Growing the tree…",
+    "Raising the village…",
+    "Hanging the bridges…",
+    "Summoning the birds…",
+    "Almost ready…",
+  ];
+  const status =
+    statusMessages[
+      Math.min(
+        statusMessages.length - 1,
+        Math.floor((Math.min(100, displayProgress) / 100) * statusMessages.length),
+      )
+    ];
+
   // Richly branched line-art tree (generated once). Many strokes draw outward
   // from the trunk via stroke-dashoffset; leaves bloom at the tips after.
   const { branches, leaves } = TREE;
@@ -212,7 +229,9 @@ export default function LoadingOverlay({ sceneReady }: { sceneReady: boolean }) 
 
         <div className="loader-copy">
           <div className="loader-title">Star Tree</div>
-          <div className="loader-subtitle">Growing the floating village</div>
+          <div className="loader-status" key={status}>
+            {status}
+          </div>
         </div>
 
         <div className="loader-meter">
@@ -339,6 +358,25 @@ export default function LoadingOverlay({ sceneReady }: { sceneReady: boolean }) 
           font-size: 12px;
           letter-spacing: 0.02em;
           color: rgba(255, 255, 255, 0.42);
+        }
+
+        .loader-status {
+          font-size: 12px;
+          letter-spacing: 0.04em;
+          color: rgba(203, 233, 140, 0.7);
+          min-height: 1em;
+          animation: status-in 0.5s ease both;
+        }
+
+        @keyframes status-in {
+          from {
+            opacity: 0;
+            transform: translateY(4px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
         }
 
         .loader-meter {

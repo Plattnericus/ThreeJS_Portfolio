@@ -4,14 +4,14 @@ import { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { MAX_HOUSES } from "@/lib/layout";
 import { sampleBranchAnchors } from "@/lib/branches";
 import { buildLantern, LANTERN_SIZE } from "@/lib/lantern";
-import { Tier, resolveTier } from "@/lib/rarity";
+import { TIER_SIZE, resolveTier } from "@/lib/rarity";
 import type { Stargazer } from "@/lib/stargazers";
 
 const BRIDGE = "/models/suspension_bridge.glb";
-const TREE = "/models/tree.glb";
 const LANTERN = "/models/stylized_lantern.glb";
 const X_AXIS = new THREE.Vector3(1, 0, 0);
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
@@ -100,12 +100,36 @@ function makeLadder(): THREE.Group {
   return g;
 }
 
-const TIER_SIZE: Record<Tier, number> = {
-  common: 0.95,
-  uncommon: 1.2,
-  rare: 1.5,
-  legendary: 1.85,
-};
+// A STRAIGHT, flat plank walkway (no sag) built to the exact span length, so it
+// reads as a real, walkable bridge between two decks. Merged → one draw call.
+function makeFlatBridge(length: number): THREE.BufferGeometry {
+  const W = 0.64; // walkway width
+  const L = Math.max(0.4, length);
+  const geos: THREE.BufferGeometry[] = [];
+  geos.push(new THREE.BoxGeometry(L, 0.06, W)); // deck slab
+  const nPlanks = Math.max(4, Math.round(L / 0.3));
+  for (let i = 0; i < nPlanks; i++) {
+    const px = -L / 2 + ((i + 0.5) / nPlanks) * L;
+    const pl = new THREE.BoxGeometry(0.17, 0.09, W * 0.96);
+    pl.translate(px, 0.02, 0);
+    geos.push(pl);
+  }
+  for (const s of [-1, 1]) {
+    const rail = new THREE.BoxGeometry(L, 0.05, 0.05);
+    rail.translate(0, 0.46, s * (W / 2 - 0.04));
+    geos.push(rail);
+    const nP = Math.max(2, Math.round(L / 0.75));
+    for (let i = 0; i <= nP; i++) {
+      const px = -L / 2 + (i / nP) * L;
+      const post = new THREE.BoxGeometry(0.05, 0.5, 0.05);
+      post.translate(px, 0.23, s * (W / 2 - 0.04));
+      geos.push(post);
+    }
+  }
+  const merged = mergeGeometries(geos, false);
+  merged.computeVertexNormals();
+  return merged;
+}
 
 // Closest distance (XZ) from the trunk (origin) to segment a→b.
 function segDistToTrunkXZ(a: THREE.Vector3, b: THREE.Vector3): number {
@@ -175,12 +199,8 @@ export function Bridges({
   stargazers?: Stargazer[] | null;
 }) {
   const { scene: bridgeScene } = useGLTF(BRIDGE);
-  const { scene: treeScene } = useGLTF(TREE);
   const { scene: lanternScene } = useGLTF(LANTERN);
-  const anchors = useMemo(
-    () => sampleBranchAnchors(treeScene, MAX_HOUSES),
-    [treeScene],
-  );
+  const anchors = useMemo(() => sampleBranchAnchors(null, MAX_HOUSES), []);
   const bridge = useMemo(() => extractModel(bridgeScene), [bridgeScene]);
   // Procedural ladder: unit height, long axis Y. (len/axis/cross drive scaling.)
   const ladder = { len: 1, axis: Y_AXIS, cross: LADDER_CROSS };
@@ -201,41 +221,38 @@ export function Bridges({
     const out: [number, number, boolean][] = [];
     if (active < 2) return out;
 
-    const classify = (i: number, j: number): { cost: number; ladder: boolean } => {
+    const classify = (
+      i: number,
+      j: number,
+    ): { cost: number; ladder: boolean; valid: boolean; hd: number } => {
       const a = anchors[i].pos;
       const b = anchors[j].pos;
       const hd = Math.hypot(b.x - a.x, b.z - a.z);
       const gap = Math.max(0, hd - deckRadius(i) - deckRadius(j));
       const dh = Math.abs(a.y - b.y);
       const crossesTrunk = segDistToTrunkXZ(a, b) < TRUNK_R;
+      // A real height difference → a LADDER (you climb up); otherwise a walkable
+      // suspension BRIDGE. Decks that overlap (gap≈0) need no link.
       const canLadder =
-        dh > LADDER_DH &&
-        dh > gap * 1.25 &&
-        gap <= MAX_LADDER_GAP &&
-        hd <= MAX_LADDER_HD;
+        dh > LADDER_DH && dh > gap * 1.25 && gap <= MAX_LADDER_GAP && hd <= MAX_LADDER_HD;
       const canBridge =
-        gap > 0.35 &&
-        gap <= MAX_BRIDGE_GAP &&
-        dh <= MAX_BRIDGE_DH &&
-        dh / Math.max(gap, 0.5) < 0.72;
+        gap > 0.35 && gap <= MAX_BRIDGE_GAP && dh <= MAX_BRIDGE_DH && dh / Math.max(gap, 0.5) < 0.72;
+      const valid = (canLadder || canBridge) && !crossesTrunk;
 
       if (!canLadder && !canBridge) {
         const ladder = dh > LADDER_DH && gap < MAX_LADDER_GAP * 1.25;
-        return {
-          cost: gap + dh * 1.8 + (crossesTrunk ? 7 : 0) + 12,
-          ladder,
-        };
+        return { cost: gap + dh * 1.8 + (crossesTrunk ? 7 : 0) + 12, ladder, valid: false, hd };
       }
       return {
-        cost:
-          gap +
-          dh * (canLadder ? 0.65 : 1.2) +
-          (canLadder ? 0.4 : 0) +
-          (crossesTrunk ? 6 : 0),
+        cost: gap + dh * (canLadder ? 0.65 : 1.2) + (canLadder ? 0.4 : 0) + (crossesTrunk ? 6 : 0),
         ladder: canLadder,
+        valid,
+        hd,
       };
     };
 
+    // 1) MST backbone so every deck is reachable (too-close decks get skipped and
+    //    the spanning tree reaches the next reachable platform instead).
     const inTree = new Array(active).fill(false);
     const best = new Array(active).fill(Infinity);
     const parent = new Array(active).fill(0);
@@ -268,8 +285,49 @@ export function Bridges({
         }
       }
     }
+
+    // 2) Net: also link each deck to its nearest VALID neighbours (walkable
+    //    bridges/ladders, never through the trunk), so it reads as a web, not a
+    //    single chain. Deduped against the MST.
+    const has = new Set(out.map(([i, j]) => (i < j ? `${i}-${j}` : `${j}-${i}`)));
+    for (let i = 0; i < active; i++) {
+      const cands: { j: number; hd: number; ladder: boolean }[] = [];
+      for (let j = 0; j < active; j++) {
+        if (i === j) continue;
+        const c = classify(i, j);
+        if (c.valid) cands.push({ j, hd: c.hd, ladder: c.ladder });
+      }
+      cands.sort((a, b) => a.hd - b.hd);
+      let added = 0;
+      for (const cand of cands) {
+        if (added >= 2) break;
+        const key = i < cand.j ? `${i}-${cand.j}` : `${cand.j}-${i}`;
+        added++;
+        if (has.has(key)) continue;
+        has.add(key);
+        out.push([i, cand.j, cand.ladder]);
+      }
+    }
     return out;
   }, [active, anchors, deckRadius]);
+
+  // A flat plank bridge geometry sized to each (non-ladder) span, so it's a
+  // straight, walkable deck (no sag). Ladders keep their procedural model.
+  const bridgeGeos = useMemo(
+    () =>
+      edges.map(([i, j, isLadder]) => {
+        if (isLadder) return null;
+        const a = anchors[i].pos;
+        const b = anchors[j].pos;
+        const dh = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+        const inset = (deckRadius(i) + deckRadius(j)) * 0.82;
+        const ay = a.y + DECK + WALKWAY_RAISE;
+        const by = b.y + DECK + WALKWAY_RAISE;
+        const span = Math.hypot(Math.max(0.4, dh - inset), by - ay);
+        return makeFlatBridge(span);
+      }),
+    [edges, anchors, deckRadius],
+  );
 
   const refs = useRef<(THREE.Group | null)[]>([]);
   const lanternRefs = useRef<(THREE.Group | null)[]>([]);
@@ -332,7 +390,8 @@ export function Bridges({
         g.scale.set(C, L, C);
         if (lg) {
           lg.visible = true;
-          lg.position.set(b3.x, b3.y + 0.22 + Math.sin(t * 0.8 + k) * 0.015, b3.z);
+          lg.position.set(b3.x, b3.y + 0.05, b3.z);
+          lg.rotation.z = Math.sin(t * 0.7 + k) * 0.04;
         }
         return;
       }
@@ -363,11 +422,14 @@ export function Bridges({
       g.position.copy(mid);
       g.position.y += 0.02; // rests just above the deck surface
       g.quaternion.setFromUnitVectors(X_AXIS, dir);
-      g.scale.set(dist / bridge.len, 0.46, 0.54);
+      g.scale.set(1, 1, 1); // flat bridge geometry is already built to span length
+      void dist;
       if (lg) {
-        // stand the lantern cleanly on the bridge planks (base on the deck)
-        lg.position.copy(mid);
-        lg.position.y += 0.04;
+        // Stand it on the planks near the span start. The suspension bridge sags
+        // in the middle, so placing it at the (deck-height) end keeps it from
+        // floating. A tiny sway keeps it alive without reading as detached.
+        lg.position.set(a3.x + dir.x * 0.7, a3.y + 0.05, a3.z + dir.z * 0.7);
+        lg.rotation.z = Math.sin(t * 0.7 + k) * 0.04;
       }
     });
   });
@@ -388,7 +450,12 @@ export function Bridges({
               {isLadder ? (
                 <primitive object={makeLadder()} />
               ) : (
-                <mesh geometry={bridge.geo} material={bridge.mat} castShadow />
+                <mesh
+                  geometry={bridgeGeos[k] ?? undefined}
+                  material={LADDER_WOOD}
+                  castShadow
+                  receiveShadow
+                />
               )}
             </group>
             <group
@@ -397,7 +464,7 @@ export function Bridges({
               }}
             >
               <primitive object={lantern} />
-              {lightsOn && k < 8 && (
+              {lightsOn && k < 3 && (
                 <pointLight
                   color="#ffb765"
                   position={[0, 0.4, 0]}

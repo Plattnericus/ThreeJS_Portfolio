@@ -1,6 +1,7 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import gsap from "gsap";
 import type { Stargazer } from "@/lib/stargazers";
 import { nameForIndex } from "@/lib/names";
 import { tierForIndex, TIER_COLOR } from "@/lib/rarity";
@@ -141,6 +142,40 @@ export default function HouseInterior({
   const [user, setUser] = useState<GhUser | null>(null);
   const [state, setState] = useState<"loading" | "done" | "error">("loading");
   const [tab, setTab] = useState<"overview" | "repositories">("overview");
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    const panel = panelRef.current;
+    if (!overlay || !panel) return;
+    const items = panel.querySelectorAll("[data-profile-item]");
+    const tl = gsap.timeline();
+    tl.fromTo(
+      overlay,
+      { autoAlpha: 0 },
+      { autoAlpha: 1, duration: 0.22, ease: "power2.out" },
+    )
+      .fromTo(
+        panel,
+        { autoAlpha: 0, y: 18, scale: 0.965, filter: "blur(14px)" },
+        {
+          autoAlpha: 1,
+          y: 0,
+          scale: 1,
+          filter: "blur(0px)",
+          duration: 0.36,
+          ease: "back.out(1.35)",
+        },
+        0.02,
+      )
+      .fromTo(
+        items,
+        { autoAlpha: 0, y: 8 },
+        { autoAlpha: 1, y: 0, duration: 0.26, stagger: 0.03, ease: "power2.out" },
+        "-=0.18",
+      );
+  }, []);
 
   useEffect(() => {
     const login = stargazer?.login;
@@ -186,11 +221,13 @@ export default function HouseInterior({
 
   return (
     <div
-      className="anim-fade absolute inset-0 z-20 grid place-items-center bg-black/55 p-4 backdrop-blur-md"
+      ref={overlayRef}
+      className="absolute inset-0 z-20 grid place-items-center bg-black/55 p-4 backdrop-blur-md"
       onClick={onClose}
     >
       <div
-        className="anim-rise relative flex h-[80vh] max-h-[680px] w-full max-w-[900px] flex-col overflow-hidden rounded-2xl border border-[#3d444d] bg-[#0d1117] shadow-2xl shadow-black/60"
+        ref={panelRef}
+        className="relative flex h-[80vh] max-h-[680px] w-full max-w-[900px] flex-col overflow-hidden rounded-2xl border border-[#3d444d] bg-[#0d1117] opacity-0 shadow-2xl shadow-black/60"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -203,7 +240,7 @@ export default function HouseInterior({
 
         <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[296px_1fr]">
           {/* Sidebar — profile identity */}
-          <aside className="flex flex-col gap-3 overflow-y-auto border-b border-[#21262d] p-6 md:border-b-0 md:border-r">
+          <aside data-profile-item className="flex flex-col gap-3 overflow-y-auto border-b border-[#21262d] p-6 md:border-b-0 md:border-r">
             <div className="flex items-end gap-4 md:block">
               {avatar && (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -299,7 +336,7 @@ export default function HouseInterior({
           </aside>
 
           {/* Main — tabs + content */}
-          <main className="flex min-h-0 flex-col">
+          <main data-profile-item className="flex min-h-0 flex-col">
             <div className="flex shrink-0 items-center gap-1 border-b border-[#21262d] px-4 pt-4">
               {(["overview", "repositories"] as const).map((t) => {
                 const active = tab === t;

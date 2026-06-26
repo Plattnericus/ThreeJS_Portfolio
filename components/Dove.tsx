@@ -5,14 +5,16 @@ import { useFrame, type ThreeEvent } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import * as THREE from "three";
+import { makeWing, flapAngle } from "@/lib/wing";
 
 const BIRD = "/models/bird_orange.glb";
 
-// Same realistic rigged bird as the flock, recoloured to a pale ivory so it
-// reads as a peace dove — real mesh, real wing animation. It glides a slow,
-// calm solo orbit apart from the others. Clicking it is a quiet secret.
-const DOVE_SCALE = 0.75;
-const MODEL_YAW = 0; // keep in sync with Birds; flip by Math.PI if reversed
+// The realistic rigged bird recoloured to ivory + broad procedural wings that
+// actually flap → a detailed peace dove. It glides a calm, findable solo orbit
+// over the island. Clicking it is a quiet secret (opens the in-memoriam panel).
+const DOVE_SCALE = 1.0;
+const MODEL_YAW = 0;
+const WING_COLOR = "#f4f3ec";
 
 export function Dove({ onFind }: { onFind?: () => void }) {
   const { scene, animations } = useGLTF(BIRD);
@@ -20,10 +22,9 @@ export function Dove({ onFind }: { onFind?: () => void }) {
   const inner = useRef<THREE.Group>(null);
   const [hovered, setHovered] = useState(false);
 
-  const { obj, mixer, chest, spine } = useMemo(() => {
+  const { obj, mixer, wingL, wingR } = useMemo(() => {
     const obj = cloneSkeleton(scene);
-    // Recolour to ivory: drop the plumage colour map (keeps normal/roughness
-    // relief) and tint white, with a faint glow so the dove is findable.
+    // Recolour to ivory: drop the plumage colour map, tint white, faint glow.
     obj.traverse((o) => {
       if (o instanceof THREE.Mesh && o.material) {
         const src = Array.isArray(o.material) ? o.material : [o.material];
@@ -33,7 +34,7 @@ export function Dove({ onFind }: { onFind?: () => void }) {
           c.color = new THREE.Color("#f3f2ec");
           if ("emissive" in c) {
             c.emissive = new THREE.Color("#fffaf0");
-            c.emissiveIntensity = 0.18;
+            c.emissiveIntensity = 0.2;
           }
           if ("roughness" in c) c.roughness = Math.min(1, (c.roughness ?? 0.7) + 0.1);
           if ("metalness" in c) c.metalness = 0;
@@ -46,16 +47,13 @@ export function Dove({ onFind }: { onFind?: () => void }) {
     if (animations[0]) {
       const action = mixer.clipAction(animations[0]);
       action.play();
-      action.timeScale = 0.6; // graceful, gliding body motion
+      action.timeScale = 0.6; // graceful head/tail motion
     }
-    // wings are skinned to the chest/spine (no wing bones) — flap those
-    let chest: THREE.Object3D | null = null;
-    let spine: THREE.Object3D | null = null;
-    obj.traverse((o) => {
-      if (/^Chest_/.test(o.name)) chest = o as THREE.Object3D;
-      else if (/^Spine/.test(o.name)) spine = o as THREE.Object3D;
-    });
-    return { obj, mixer, chest: chest as THREE.Object3D | null, spine: spine as THREE.Object3D | null };
+    const wingR = makeWing(1, WING_COLOR, "#d2d2c8", 0.9);
+    const wingL = makeWing(-1, WING_COLOR, "#d2d2c8", 0.9);
+    wingR.position.set(0.14, 0.72, 0.08);
+    wingL.position.set(-0.14, 0.72, 0.08);
+    return { obj, mixer, wingL, wingR };
   }, [scene, animations]);
 
   useEffect(() => {
@@ -64,8 +62,9 @@ export function Dove({ onFind }: { onFind?: () => void }) {
     };
   }, [mixer]);
 
+  // calm, findable orbit over the island
   const path = useMemo(
-    () => ({ radius: 17, height: 14.5, speed: 0.085, phase: 1.2, bob: 0.7 }),
+    () => ({ radius: 14, height: 12.5, speed: 0.11, phase: 1.2, bob: 0.7 }),
     [],
   );
   const rot = useRef(new THREE.Euler(0, 0, 0, "YXZ"));
@@ -82,7 +81,6 @@ export function Dove({ onFind }: { onFind?: () => void }) {
       Math.sin(a) * path.radius,
     );
 
-    // face direction of travel, bank gently into the turn
     const vel = pos.clone().sub(prev.current);
     prev.current.copy(pos);
     const sp = vel.length();
@@ -97,9 +95,12 @@ export function Dove({ onFind }: { onFind?: () => void }) {
       rot.current.z += (-dyaw * 6 - rot.current.z) * Math.min(1, dt * 4);
     }
 
-    // soft wing-beat: pulse + flap the chest/spine the wings are skinned to
-    const beat = Math.sin(t * 8 + path.phase);
-    g.position.set(pos.x, pos.y + beat * 0.06, pos.z);
+    // graceful flapping wings + a body bob synced to the beat
+    const hz = 6;
+    const flap = flapAngle(t, path.phase, true, hz);
+    wingR.rotation.z = flap;
+    wingL.rotation.z = -flap;
+    g.position.set(pos.x, pos.y + Math.sin(t * hz + path.phase) * 0.05, pos.z);
     g.rotation.copy(rot.current);
 
     const target = hovered ? DOVE_SCALE * 1.16 : DOVE_SCALE;
@@ -107,11 +108,7 @@ export function Dove({ onFind }: { onFind?: () => void }) {
       const s = inner.current.scale.x + (target - inner.current.scale.x) * 0.12;
       inner.current.scale.setScalar(s);
     }
-
     mixer.update(dt);
-    // flap after the clip so the wings beat (wings are skinned to chest/spine)
-    if (chest) chest.rotation.z += beat * 0.2;
-    if (spine) spine.rotation.z += beat * 0.1;
   });
 
   const enter = (e: ThreeEvent<PointerEvent>) => {
@@ -132,16 +129,13 @@ export function Dove({ onFind }: { onFind?: () => void }) {
     <group ref={wrapper}>
       <group ref={inner} scale={DOVE_SCALE}>
         {/* generous invisible hit target — the dove is small and moving */}
-        <mesh
-          position={[0, 0.7, 0]}
-          onPointerOver={enter}
-          onPointerOut={leave}
-          onClick={click}
-        >
-          <sphereGeometry args={[1.4, 8, 8]} />
+        <mesh position={[0, 0.7, 0]} onPointerOver={enter} onPointerOut={leave} onClick={click}>
+          <sphereGeometry args={[1.5, 8, 8]} />
           <meshBasicMaterial transparent opacity={0} depthWrite={false} />
         </mesh>
         <primitive object={obj} />
+        <primitive object={wingL} />
+        <primitive object={wingR} />
       </group>
     </group>
   );

@@ -18,6 +18,23 @@ export const TIER_COLOR: Record<Tier, string> = {
   legendary: "#e0a04a",
 };
 
+// House/platform size per tier (rarer = bigger). Single source of truth shared by
+// Houses, Bridges, Ants and the Tree (leaf-collision + bridge anchoring).
+export const TIER_SIZE: Record<Tier, number> = {
+  common: 0.95,
+  uncommon: 1.2,
+  rare: 1.5,
+  legendary: 1.85,
+};
+
+/** Deck radius for house i — what the bridges land on and leaves must avoid. */
+export function deckRadius(
+  i: number,
+  stargazers?: { tier?: Tier }[] | null,
+): number {
+  return TIER_SIZE[resolveTier(i, stargazers)] * 1.5;
+}
+
 // Deterministic pseudo-random in [0,1) from an integer seed.
 function rand(seed: number): number {
   const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;

@@ -10,6 +10,7 @@ import MemorialSecret from "@/components/MemorialSecret";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import { FlyIcon } from "@/components/Icons";
 import { nameForHouse, type Stargazer } from "@/lib/stargazers";
+import { resolveTier } from "@/lib/rarity";
 
 // Toggle the in-scene star editor via env (NEXT_PUBLIC_DEV_CONTROLS=true).
 const DEV_CONTROLS = process.env.NEXT_PUBLIC_DEV_CONTROLS === "true";
@@ -35,6 +36,7 @@ export default function Home() {
   const [mode, setMode] = useState<"live" | "manual">("live");
   const [manualSky, setManualSky] = useState<Sky>("clear");
   const [search, setSearch] = useState("");
+  const [searchActive, setSearchActive] = useState(-1);
   const [fly, setFly] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const [secretOpen, setSecretOpen] = useState(false);
@@ -113,20 +115,36 @@ export default function Home() {
     [weather],
   );
 
-  // Match search against the (placeholder) house names, within current stars.
-  const q = search.trim().toLowerCase();
-  let highlight = -1;
-  let matchName: string | null = null;
-  if (q) {
-    for (let i = 0; i < stars; i++) {
-      const nm = nameForHouse(i, stargazers);
-      if (nm.toLowerCase().includes(q)) {
-        highlight = i;
-        matchName = nm;
-        break;
-      }
+  const searchResults = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const count = Math.max(0, Math.floor(stars));
+    const all = Array.from({ length: count }, (_, i) => {
+      const gazer = stargazers?.[i] ?? null;
+      return {
+        index: i,
+        name: nameForHouse(i, stargazers),
+        tier: resolveTier(i, stargazers),
+        contributor: Boolean(gazer?.contributor),
+      };
+    });
+    if (!q) return all;
+    return all.filter((result) => result.name.toLowerCase().includes(q));
+  }, [search, stargazers, stars]);
+
+  useEffect(() => {
+    if (searchResults.length === 0) {
+      setSearchActive(-1);
+      return;
     }
-  }
+    if (
+      searchActive >= 0 &&
+      !searchResults.some((result) => result.index === searchActive)
+    ) {
+      setSearchActive(searchResults[0].index);
+    }
+  }, [searchActive, searchResults]);
+
+  const highlight = searchActive;
 
   return (
     <main className="relative h-full w-full overflow-hidden">
@@ -156,7 +174,18 @@ export default function Home() {
           sceneReady ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
       >
-        <SearchBar query={search} onQuery={setSearch} match={matchName} />
+        <SearchBar
+          query={search}
+          onQuery={setSearch}
+          results={searchResults}
+          activeIndex={highlight}
+          onActive={setSearchActive}
+          onSelect={(result) => {
+            setSearch(result.name);
+            setSearchActive(result.index);
+            setSelected(result.index);
+          }}
+        />
 
         <button
           onClick={() => setFly((f) => !f)}

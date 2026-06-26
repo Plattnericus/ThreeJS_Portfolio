@@ -2,9 +2,9 @@
 // reveals more of the trunk + branches (the tree "builds itself") and grows the
 // overall size, slowing as it gets bigger so early stars matter most.
 
-const BASE_SCALE = 0.35; // small young tree at 0 stars
+const BASE_SCALE = 0.16; // a tiny, almost-dead sprout at 0 stars
 const MAX_SCALE = 2.0;
-const GROWTH_K = 0.42;
+const GROWTH_K = 0.46;
 
 /** Overall tree scale for a given star count. Grows a lot, slowing as it ages. */
 export function treeScale(stars: number): number {

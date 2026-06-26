@@ -4,8 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useFrame } from "@react-three/fiber";
 import { Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import gsap from "gsap";
-import { TIER_BUILDING, Tier, resolveTier } from "@/lib/rarity";
+import { TIER_BUILDING, TIER_SIZE, Tier, resolveTier } from "@/lib/rarity";
 import { MAX_HOUSES } from "@/lib/layout";
 import { sampleBranchAnchors, type Anchor } from "@/lib/branches";
 import { buildLantern, LANTERN_SIZE } from "@/lib/lantern";
@@ -13,9 +14,12 @@ import { nameForIndex } from "@/lib/names";
 import type { Stargazer } from "@/lib/stargazers";
 
 const PACK = "/models/casual_village_buildings_pack.glb";
-const TREE = "/models/tree.glb";
 const LANTERN = "/models/stylized_lantern.glb";
 const LANTERN_ROT = 0; // model is already Y-up; no rotation keeps it standing
+// Only the first few houses get a real (forward-rendered) point light at night —
+// every other lantern still glows via baked emissive. Point lights compile into
+// every standard material's shader, so capping them is a big fragment-cost win.
+const LIT_HOUSES = 6;
 
 function rand(seed: number) {
   const x = Math.sin(seed * 53.17 + 11.3) * 43758.5453;
@@ -75,70 +79,53 @@ const WOOD_GROOVE = new THREE.MeshStandardMaterial({
   roughness: 0.9,
 });
 
+// Built as 3 merged meshes (one per material) instead of ~17 separate ones, so a
+// village of 40 houses costs ~120 platform draw calls, not ~680.
 function makePlatform(deckR: number): THREE.Group {
   const g = new THREE.Group();
-  const deck = new THREE.Mesh(
-    new THREE.CylinderGeometry(deckR, deckR * 0.92, 0.34, 36),
-    WOOD,
-  );
-  deck.position.y = -0.17;
+  const m = new THREE.Matrix4();
+
+  // deck slab (WOOD)
+  const deckGeo = new THREE.CylinderGeometry(deckR, deckR * 0.92, 0.34, 36);
+  deckGeo.translate(0, -0.17, 0);
+  const deck = new THREE.Mesh(deckGeo, WOOD);
   deck.castShadow = true;
   deck.receiveShadow = true;
   g.add(deck);
 
+  // plank grooves (WOOD_GROOVE) — merged
+  const grooveGeos: THREE.BufferGeometry[] = [];
   for (let i = -3; i <= 3; i++) {
     const z = (i / 3.8) * deckR;
     const chord = Math.sqrt(Math.max(0.1, deckR * deckR - z * z)) * 1.72;
-    const groove = new THREE.Mesh(
-      new THREE.BoxGeometry(chord, 0.018, 0.028),
-      WOOD_GROOVE,
-    );
-    groove.position.set(0, 0.012, z);
-    groove.receiveShadow = true;
-    g.add(groove);
+    const gg = new THREE.BoxGeometry(chord, 0.018, 0.028);
+    gg.translate(0, 0.012, z);
+    grooveGeos.push(gg);
   }
+  const grooves = new THREE.Mesh(mergeGeometries(grooveGeos, false), WOOD_GROOVE);
+  grooves.receiveShadow = true;
+  g.add(grooves);
 
-  const rim = new THREE.Mesh(
-    new THREE.TorusGeometry(deckR * 0.99, 0.055, 8, 36),
-    WOOD_DARK,
-  );
-  rim.rotation.x = Math.PI / 2;
-  rim.position.y = 0.02;
-  rim.castShadow = true;
-  g.add(rim);
-
-  const rail = new THREE.Mesh(
-    new THREE.TorusGeometry(deckR * 0.97, 0.05, 8, 36),
-    WOOD_DARK,
-  );
-  rail.rotation.x = Math.PI / 2;
-  rail.position.y = 0.5;
-  g.add(rail);
-
+  // rim + rail + railing posts (WOOD_DARK) — merged
+  const darkGeos: THREE.BufferGeometry[] = [];
+  const rim = new THREE.TorusGeometry(deckR * 0.99, 0.055, 8, 36);
+  rim.applyMatrix4(m.makeRotationX(Math.PI / 2).setPosition(0, 0.02, 0));
+  darkGeos.push(rim);
+  const rail = new THREE.TorusGeometry(deckR * 0.97, 0.05, 8, 36);
+  rail.applyMatrix4(m.makeRotationX(Math.PI / 2).setPosition(0, 0.5, 0));
+  darkGeos.push(rail);
   for (let i = 0; i < 12; i++) {
     const a = (i / 12) * Math.PI * 2;
-    const post = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.045, 0.05, 0.58, 6),
-      WOOD_DARK,
-    );
-    post.position.set(
-      Math.cos(a) * deckR * 0.95,
-      0.25,
-      Math.sin(a) * deckR * 0.95,
-    );
-    post.castShadow = true;
-    g.add(post);
+    const post = new THREE.CylinderGeometry(0.045, 0.05, 0.58, 6);
+    post.translate(Math.cos(a) * deckR * 0.95, 0.25, Math.sin(a) * deckR * 0.95);
+    darkGeos.push(post);
   }
+  const dark = new THREE.Mesh(mergeGeometries(darkGeos, false), WOOD_DARK);
+  dark.castShadow = true;
+  g.add(dark);
+
   return g;
 }
-
-// Smaller treehouse-sized buildings; rarer = a bit bigger.
-const TIER_SIZE: Record<Tier, number> = {
-  common: 0.95,
-  uncommon: 1.2,
-  rare: 1.5,
-  legendary: 1.85,
-};
 
 type BuildFn = (tier: Tier) => THREE.Group | null;
 
@@ -285,25 +272,16 @@ function House({
         {built.building && <primitive object={built.building} position={[0, 0.04, 0]} />}
         <group position={[Math.cos(built.la) * built.lr, 0.04, Math.sin(built.la) * built.lr]}>
           <primitive object={lantern} />
-          {active && lightsOn && i < 10 && (
+          {active && lightsOn && i < LIT_HOUSES && (
             <pointLight
               color="#ffb765"
               position={[0, size * 0.45, 0]}
-              intensity={5 * night}
-              distance={size * 4}
+              intensity={6 * night}
+              distance={size * 4.5}
               decay={2}
             />
           )}
         </group>
-        {active && lightsOn && i < 8 && (
-          <pointLight
-            color="#ffc27a"
-            position={[0, size * 0.55, 0]}
-            intensity={7 * night}
-            distance={size * 3.5}
-            decay={2}
-          />
-        )}
       </group>
 
       {hovered && active && (
@@ -340,12 +318,8 @@ export function Houses({
   onSelect?: (i: number) => void;
 }) {
   const makeBuilding = useBuildingFactory();
-  const { scene: treeScene } = useGLTF(TREE);
   const { scene: lanternScene } = useGLTF(LANTERN);
-  const anchors = useMemo(
-    () => sampleBranchAnchors(treeScene, MAX_HOUSES),
-    [treeScene],
-  );
+  const anchors = useMemo(() => sampleBranchAnchors(null, MAX_HOUSES), []);
 
   const groups = useRef<(THREE.Group | null)[]>([]);
   const active = Math.min(anchors.length, Math.max(0, Math.floor(stars)));
