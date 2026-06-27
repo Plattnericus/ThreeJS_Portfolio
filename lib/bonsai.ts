@@ -2,13 +2,25 @@ import * as THREE from "three";
 import { TIER_SIZE, tierForIndex } from "./rarity";
 
 const GOLDEN = Math.PI * (3 - Math.sqrt(5));
-// Spiral-tower layout: platforms climb a golden-angle helix up the trunk, spaced
-// so there's always a ~5m clear gap between their edges; the tree grows TALLER as
-// stars arrive (founder lowest, newest on top).
-const HELIX_R = 5.2; // horizontal radius of the platform helix
-const Y0 = 3.6; // height of the first (founder) platform — lifted clear of the ground
-const PITCH = 2.2; // base vertical rise per platform
-const GAP_K = 0.6; // extra rise scaled by the two platforms' radii → keeps the gap ~5m+
+// Spiral-tower layout: platforms climb a golden-angle helix up the trunk. As more
+// stars arrive the tree grows TALLER *and* fans WIDER — each higher platform sits
+// on a larger radius, so the silhouette broadens into a crown instead of a thin
+// pole (founder lowest+innermost, newest on top+outermost). Lower pitch keeps the
+// platforms close enough in height that they link with walkable BRIDGE ramps
+// rather than tall ladders.
+const HELIX_R = 5.0; // base horizontal radius of the platform helix (innermost)
+const SPREAD_R = 1.45; // platforms fan OUTWARD with height → broad, full, NOT a pole
+const Y0 = 3.2; // height of the first (founder) platform — lifted clear of the ground
+const PITCH = 1.15; // base vertical rise per platform (low → broad spiral, not a tower)
+const GAP_K = 0.14; // extra rise scaled by deck radii (radial spread does the rest)
+
+const MAX_HELIX_R = 10.5; // keep platforms (incl. their decks) over the floating island
+/** Horizontal radius of the platform at slot `i`. Grows with √i so the tower fans
+ *  out as it climbs (wider tree with more stars), then clamps so even a crowded
+ *  tower stays on the island rather than hanging off into open sky. */
+export function slotRadius(i: number): number {
+  return Math.min(MAX_HELIX_R, HELIX_R + SPREAD_R * Math.sqrt(Math.max(0, i)));
+}
 
 export type BonsaiNode = {
   index: number;
@@ -61,14 +73,15 @@ export function bonsaiNodes(count: number): BonsaiNode[] {
     const y = slotHeight(i);
     const angle = i * GOLDEN + 0.72;
     const radial = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
+    const r = slotRadius(i);
     const base = spineAt(y);
     const tip = base
       .clone()
-      .addScaledVector(radial, HELIX_R)
+      .addScaledVector(radial, r)
       .add(new THREE.Vector3(0, 0.25, 0));
     const elbow = base
       .clone()
-      .addScaledVector(radial, HELIX_R * 0.5)
+      .addScaledVector(radial, r * 0.5)
       .add(new THREE.Vector3(0, 0.34, 0));
 
     out.push({

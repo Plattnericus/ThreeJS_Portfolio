@@ -817,7 +817,7 @@ export function Tree({
       });
     };
 
-    let budget = THREE.MathUtils.clamp(Math.round(span * 90), 4200, 9000); // segment cap (perf)
+    let budget = THREE.MathUtils.clamp(Math.round(span * 110), 5200, 12000); // segment cap (perf)
     const grow = (
       pos: THREE.Vector3,
       dir: THREE.Vector3,
@@ -856,12 +856,15 @@ export function Tree({
     // up to the apex, CAPPING the trunk tip. Boughs grow from the spine toward
     // shell points (golden-angle, outward-biased, jittered → rounded but not a
     // perfect ball); short segments fork into leafy twigs.
-    const NC = THREE.MathUtils.clamp(Math.round(span * 3.4 + 22), 28, 240);
+    const NC = THREE.MathUtils.clamp(Math.round(span * 4.6 + 30), 40, 320);
     for (let i = 0; i < NC; i++) {
       const v = i / Math.max(1, NC - 1); // 0 (base) .. 1 (apex)
       const ty = cBot + v * (apexY - cBot) + (rnd() - 0.5) * 0.9;
-      // dome radius: widest in the lower-middle, tapering to a rounded apex cap
-      const domeR = cRX * (0.34 + 0.66 * Math.sin(Math.min(1, v * 1.08) * Math.PI));
+      // Envelope WIDENS with height to wrap the platforms that fan outward as the
+      // tower climbs (the top platforms are the outermost — they must not stick out
+      // bare), and only rounds off in the top ~15% so the apex still caps cleanly.
+      const cap = Math.pow(Math.max(0, (v - 0.85) / 0.15), 2);
+      const domeR = cRX * (0.5 + 0.5 * Math.min(1, v * 1.2)) * (1 - 0.5 * cap);
       const a = i * GA + rnd() * 0.5;
       const rr = 0.5 + 0.5 * Math.sqrt(rnd()); // outward bias → rounded shell
       const target = new THREE.Vector3(Math.cos(a) * domeR * rr, ty, Math.sin(a) * domeR * rr);
@@ -873,16 +876,33 @@ export function Tree({
       dir.normalize();
       grow(sp, dir, 1.5 + rnd() * 0.5, 0.085, 5); // thin, short-segmented, leafy boughs
     }
-    // (b) per-platform NEST — short boughs hugging each platform so every treehouse
-    // nestles in dense leaves (carved off the deck itself).
+    // (b) per-platform NEST — a dense ring of boughs hugging each platform so every
+    // treehouse nestles in leaves (carved off the deck itself). The leaves wrap the
+    // deck rim and rise as a leafy collar behind/around the house, so no platform —
+    // not even the topmost, outermost ones — is left sitting bare.
     for (let i = 0; i < active; i++) {
       const base = nodes[i].base;
       const tip = nodes[i].tip;
-      for (let k = 0; k < 6; k++) {
-        const a = (k / 6) * Math.PI * 2 + i * 1.3;
-        const o = base.clone().lerp(tip, 0.55 + rnd() * 0.3);
-        const out = new THREE.Vector3(Math.cos(a), 0.1 + rnd() * 0.5, Math.sin(a)).normalize();
-        grow(o, out, 0.9 + rnd() * 0.5, 0.06, 3); // short nest twigs
+      const dr = deckRadius(i, stargazers);
+      const RING = 11;
+      for (let k = 0; k < RING; k++) {
+        const a = (k / RING) * Math.PI * 2 + i * 1.3;
+        // anchor just outside the deck rim, all around it, and grow outward + up so
+        // foliage forms a bowl the platform sits in (never INTO the house column).
+        const o = tip
+          .clone()
+          .add(new THREE.Vector3(Math.cos(a) * dr * 1.04, -0.25 + rnd() * 0.3, Math.sin(a) * dr * 1.04));
+        const out = new THREE.Vector3(Math.cos(a) * 0.85, 0.45 + rnd() * 0.6, Math.sin(a) * 0.85).normalize();
+        grow(o, out, 1.0 + rnd() * 0.6, 0.06, 3); // short, leafy collar twigs
+      }
+      // a few boughs just OUTSIDE the rim reaching UP → a leafy backdrop rising
+      // above the roofline (anchored clear of the deck column so they aren't carved).
+      for (let k = 0; k < 4; k++) {
+        const a = i * 1.3 + k * 1.7;
+        const o = tip
+          .clone()
+          .add(new THREE.Vector3(Math.cos(a) * dr * 1.08, 0.1, Math.sin(a) * dr * 1.08));
+        grow(o, new THREE.Vector3(Math.cos(a) * 0.35, 1, Math.sin(a) * 0.35).normalize(), 1.4 + rnd() * 0.6, 0.055, 3);
       }
     }
     // (c) TIP CAP — a dense leafy knot wrapping the top of the trunk on all sides

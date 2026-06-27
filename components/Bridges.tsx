@@ -18,14 +18,18 @@ const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const DECK = 0.35; // platform deck top above the raw branch anchor (matches Houses)
 const WALKWAY_RAISE = 0.24; // extra clearance so bridges visibly sit above branches
 const TRUNK_R = 1.85; // prefer spans that do not cut through the central trunk
-const LADDER_DH = 1.2; // height gap above this → ladder, not a bridge
 const LADDER_W = 0.85;
 const LADDER_CROSS = 0.46; // built ladder's widest extent (for cross-scaling)
-const MAX_BRIDGE_GAP = 11; // platforms spiral ~5m apart up the tower
-const MAX_BRIDGE_DH = 2.4; // a BRIDGE only links roughly-level platforms
-const MAX_LADDER_GAP = 7; // a LADDER climbs to a platform clearly ABOVE
+// Bridges are the DEFAULT: a flat plank bridge is a walkable ramp, so it can also
+// climb. A ladder is ONLY used when the link is essentially "straight up" — the two
+// decks are nearly stacked (tiny horizontal run) with a real height difference, so
+// no bridge ramp could lie between them.
+const MAX_BRIDGE_GAP = 13.5; // longest walkable plank span (edge-to-edge)
+const MAX_BRIDGE_DH = 9; // a ramp bridge may climb this much…
+const MAX_BRIDGE_SLOPE = 1.5; // …as long as it stays gentler than ~56° (rise/run)
+const LADDER_MIN_DH = 1.0; // below this rise nothing needs a ladder
+const LADDER_MAX_RUN = 2.6; // ladder only when decks are this close horizontally
 const MAX_LADDER_HD = 11;
-const STEEP_DH = 2.2; // height diff above this → ladder (climb up), else bridge
 
 const WOOD_NOISE = /* glsl */ `
   float whash(vec3 p){ return fract(sin(dot(p, vec3(17.17, 41.93, 9.71))) * 43758.5453); }
@@ -230,22 +234,32 @@ export function Bridges({
       const hd = Math.hypot(b.x - a.x, b.z - a.z);
       const gap = Math.max(0, hd - deckRadius(i) - deckRadius(j));
       const dh = Math.abs(a.y - b.y);
+      const run = Math.max(0.001, gap); // horizontal room a plank ramp has to lie in
+      const slope = dh / run; // rise / run of a would-be ramp bridge
       const crossesTrunk = segDistToTrunkXZ(a, b) < TRUNK_R;
-      // A real height difference → a LADDER (you climb up); otherwise a walkable
-      // suspension BRIDGE. Decks that overlap (gap≈0) need no link.
-      // A platform clearly ABOVE → a ladder you climb; roughly level → a flat
-      // plank bridge across.
-      const canLadder = dh > STEEP_DH && gap <= MAX_LADDER_GAP && hd <= MAX_LADDER_HD;
-      const canBridge = gap > 0.35 && gap <= MAX_BRIDGE_GAP && dh <= MAX_BRIDGE_DH;
-      const valid = (canLadder || canBridge) && !crossesTrunk;
+      // PREFER a walkable plank BRIDGE wherever one can span (it ramps up gently as
+      // needed). Only when two decks are nearly stacked — a real rise with almost no
+      // horizontal room — is it "straight up", and THAT gets a ladder.
+      const canBridge =
+        gap > 0.35 && gap <= MAX_BRIDGE_GAP && dh <= MAX_BRIDGE_DH && slope <= MAX_BRIDGE_SLOPE;
+      const canLadder = dh > LADDER_MIN_DH && run <= LADDER_MAX_RUN && hd <= MAX_LADDER_HD;
+      // The bridge wins ties — a ladder is the fallback only when no bridge fits.
+      const useLadder = canLadder && !canBridge;
+      const valid = (canBridge || canLadder) && !crossesTrunk;
 
-      if (!canLadder && !canBridge) {
-        const ladder = dh > STEEP_DH;
-        return { cost: gap + dh * 1.8 + (crossesTrunk ? 7 : 0) + 12, ladder, valid: false, hd };
+      if (!valid) {
+        return {
+          cost: gap + dh * 1.8 + (crossesTrunk ? 7 : 0) + 12,
+          ladder: useLadder || dh > LADDER_MIN_DH,
+          valid: false,
+          hd,
+        };
       }
       return {
-        cost: gap + dh * (canLadder ? 0.65 : 1.2) + (canLadder ? 0.4 : 0) + (crossesTrunk ? 6 : 0),
-        ladder: canLadder,
+        // bias the spanning tree toward bridges; ladders carry a fixed surcharge so
+        // they're only chosen where a bridge genuinely cannot reach.
+        cost: gap + dh * 0.9 + (useLadder ? 4 : 0) + (crossesTrunk ? 6 : 0),
+        ladder: useLadder,
         valid,
         hd,
       };

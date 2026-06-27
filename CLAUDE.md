@@ -177,15 +177,23 @@ sit on its surface; below it is open sky (it floats). Notes:
 
 ## Tree Growth (design)
 
-> **IMPLEMENTED as a SPIRAL TOWER (2026-06, per owner).** Platforms climb a golden-angle **helix** up
-> the trunk (`bonsaiNodes` in `lib/bonsai.ts`, radius `HELIX_R`, size-aware pitch) with a guaranteed
-> **~5m clear gap** between platform edges. The tree grows **TALLER** as stars arrive — **founder
-> lowest, newest on top** (inverts the "founders at crown" note below, by the owner's choice). Height
-> = `treeHeight(stars)` (`lib/growth.ts`); the trunk is sampled along `spineAt(y)` from 0 to that
-> height and regenerates as it grows (no uniform `treeScale` — that would change the fixed spacing).
-> The recursive crown (`Tree.tsx`) wraps the whole column. The camera (`Experience.tsx`) auto-frames
-> the tower's mid-height; bridges ramp up the spiral (`MAX_BRIDGE_DH` raised). Tune
-> `HELIX_R`/`PITCH`/`GAP_K` in `lib/bonsai.ts`.
+> **IMPLEMENTED as a BROADENING SPIRAL (2026-06, per owner).** Platforms climb a golden-angle
+> **helix** up the trunk (`bonsaiNodes` in `lib/bonsai.ts`), but each higher slot sits on a LARGER
+> radius (`slotRadius(i) = HELIX_R + SPREAD_R·√i`, clamped to `MAX_HELIX_R` so it stays over the
+> island). So the tree grows **TALLER *and* WIDER** as stars arrive — it fans into a crown, not a thin
+> pole (owner's explicit ask). Low `PITCH` keeps platforms close enough in height that links are
+> walkable **bridge ramps**, not ladders. **Founder lowest+innermost, newest on top+outermost.**
+> Height = `treeHeight(stars)` (`lib/growth.ts`); the trunk is sampled along `spineAt(y)` and
+> regenerates as it grows (no uniform `treeScale`).
+> **Bridges vs ladders (`Bridges.tsx`):** a flat plank bridge is a walkable *ramp*, so it's the
+> DEFAULT for any reachable span (it climbs as needed); a **ladder is used ONLY for a near-vertical
+> climb** — two decks nearly stacked (`run ≤ LADDER_MAX_RUN`) with a real rise. Bridge vs ladder is
+> decided by **slope** (`MAX_BRIDGE_SLOPE`), not by absolute height, and the MST surcharges ladders so
+> bridges always win where one fits.
+> The crown envelope (`Tree.tsx`) **widens with height** (the top platforms are the outermost, so the
+> dome must wrap them — it no longer tapers to a point) and each platform gets a dense leaf collar so
+> none sits bare. The camera (`Experience.tsx`) auto-frames mid-height. Tune
+> `HELIX_R`/`SPREAD_R`/`PITCH`/`GAP_K` in `lib/bonsai.ts`.
 
 The original design below (founders-at-crown, single rounded canopy) is superseded by the spiral
 tower above but kept for the narrative rationale.
