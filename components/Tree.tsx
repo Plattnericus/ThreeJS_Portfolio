@@ -914,12 +914,28 @@ export function Tree({
       grow(o, out, 0.7 + rnd() * 0.7, 0.05, 3);
     }
     const tipBase = spineAt(trunkTopY);
-    for (let k = 0; k < 14; k++) {
+    for (let k = 0; k < 26; k++) {
       addLeaf(
         tipBase
           .clone()
-          .add(new THREE.Vector3((rnd() - 0.5) * 1.1, rnd() * 1.2 - 0.2, (rnd() - 0.5) * 1.1)),
+          .add(new THREE.Vector3((rnd() - 0.5) * 1.3, rnd() * 1.5 - 0.2, (rnd() - 0.5) * 1.3)),
       );
+    }
+
+    // (d) APEX FILL — extra leaf clumps packed straight into the TOP of the crown
+    // envelope (no branch needed; leaves are one cheap instanced draw call) so the
+    // upper silhouette reads as one full, rounded mass instead of wispy bare twigs
+    // poking out. Fills the upper ~45% of the dome, fullest at the crown.
+    const topStart = cBot + span * 0.55;
+    const NF = THREE.MathUtils.clamp(Math.round(span * 30), 160, 640);
+    for (let i = 0; i < NF; i++) {
+      const ty = topStart + (i / Math.max(1, NF - 1)) * (apexY + 0.8 - topStart) + (rnd() - 0.5) * 0.8;
+      const vv = THREE.MathUtils.clamp((ty - cBot) / span, 0, 1);
+      const cap = Math.pow(Math.max(0, (vv - 0.85) / 0.15), 2);
+      const domeR = cRX * (0.5 + 0.5 * Math.min(1, vv * 1.2)) * (1 - 0.5 * cap);
+      const a = i * GA + rnd() * 0.6;
+      const rr = Math.sqrt(rnd()); // fill the interior AND the shell evenly
+      addLeaf(new THREE.Vector3(Math.cos(a) * domeR * rr, ty, Math.sin(a) * domeR * rr));
     }
 
     const branchGeo = branchGeos.length ? mergeGeometries(branchGeos, false) : null;

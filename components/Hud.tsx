@@ -6,12 +6,10 @@ import { MinusIcon, PlusIcon, StarIcon } from "./Icons";
 // +/- editor is a DEV control, shown only when enabled via env (see page.tsx).
 export default function Hud({
   stars,
-  live,
   devControls,
   onChange,
 }: {
   stars: number;
-  live: boolean;
   devControls: boolean;
   onChange: (n: number) => void;
 }) {
@@ -43,10 +41,6 @@ export default function Hud({
             <PlusIcon className="h-3.5 w-3.5" />
           </button>
         )}
-      </div>
-
-      <div className="pointer-events-none absolute bottom-6 right-6 text-[11px] text-white/35">
-        {live ? "Live · GitHub" : devControls ? "Dev preview" : "Awaiting first stars"}
       </div>
     </>
   );

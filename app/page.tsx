@@ -30,6 +30,9 @@ export default function Home() {
   const [stars, setStars] = useState(0);
   const [starsLive, setStarsLive] = useState(false);
   const [stargazers, setStargazers] = useState<Stargazer[] | null>(null);
+  // When the stargazer feed was last successfully pulled — surfaced quietly in
+  // the settings panel so you can tell how fresh the village is.
+  const [lastSync, setLastSync] = useState<number | null>(null);
 
   // Weather: live reading from Sterzing, plus a manual override mode.
   const [liveWeather, setLiveWeather] = useState<Weather | null>(null);
@@ -66,6 +69,7 @@ export default function Home() {
           if (typeof d.stars === "number") setStars(d.stars);
           setStarsLive(Boolean(d.live));
           setStargazers(Array.isArray(d.stargazers) ? d.stargazers : null);
+          setLastSync(Date.now());
         })
         .catch(() => {});
 
@@ -213,7 +217,6 @@ export default function Home() {
         )}
         <Hud
           stars={stars}
-          live={starsLive}
           devControls={DEV_CONTROLS}
           onChange={(n) => setStars(Math.max(0, n))}
         />
@@ -222,6 +225,8 @@ export default function Home() {
           mode={mode}
           date={date}
           manualSky={manualSky}
+          starsLive={starsLive}
+          lastSync={lastSync}
           onMode={setMode}
           onDate={setDate}
           onSky={setManualSky}

@@ -53,11 +53,24 @@ export type ManualDate = {
   hour: number; // 0..23
 };
 
+// Compact relative phrasing for the sneaky sync line ("synced 12s ago").
+function relTime(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 5) return "just now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return `${h}h ago`;
+}
+
 export default function SettingsMenu({
   weather,
   mode,
   date,
   manualSky,
+  starsLive,
+  lastSync,
   onMode,
   onDate,
   onSky,
@@ -66,141 +79,123 @@ export default function SettingsMenu({
   mode: "live" | "manual";
   date: ManualDate;
   manualSky: Sky;
+  starsLive: boolean;
+  lastSync: number | null;
   onMode: (m: "live" | "manual") => void;
   onDate: (d: ManualDate) => void;
   onSky: (s: Sky) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [, setTick] = useState(0); // drives the live "synced … ago" readout
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const gearIconRef = useRef<HTMLSpanElement>(null);
   const closeIconRef = useRef<HTMLSpanElement>(null);
-  const buttonSweepRef = useRef<HTMLSpanElement>(null);
+  const rippleRef = useRef<HTMLSpanElement>(null);
   const sweepRef = useRef<HTMLDivElement>(null);
   const season = seasonFromMonth(Math.min(11, Math.max(0, date.month - 1)));
   const seasonColor = SEASON_ACCENT[season];
 
+  // Re-render once a second while the panel is open so the relative sync time
+  // keeps ticking; idle (closed) it costs nothing.
   useEffect(() => {
-    if (gearIconRef.current && closeIconRef.current) {
-      gsap.killTweensOf([gearIconRef.current, closeIconRef.current, buttonSweepRef.current]);
-      if (open) {
-        gsap
-          .timeline()
-          .to(gearIconRef.current, {
-            x: 14,
-            autoAlpha: 0,
-            rotate: 95,
-            duration: 0.24,
-            ease: "power2.in",
-          })
-          .fromTo(
-            closeIconRef.current,
-            { x: -14, autoAlpha: 0, rotate: -70 },
-            {
-              x: 0,
-              autoAlpha: 1,
-              rotate: 0,
-              duration: 0.32,
-              ease: "back.out(1.9)",
-            },
-            "-=0.13",
-          );
-      } else {
-        gsap
-          .timeline()
-          .to(closeIconRef.current, {
-            x: 14,
-            autoAlpha: 0,
-            rotate: 70,
-            duration: 0.2,
-            ease: "power2.in",
-          })
-          .fromTo(
-            gearIconRef.current,
-            { x: -14, autoAlpha: 0, rotate: -95 },
-            {
-              x: 0,
-              autoAlpha: 1,
-              rotate: 0,
-              duration: 0.34,
-              ease: "back.out(1.75)",
-            },
-            "-=0.08",
-          );
-      }
-      if (buttonSweepRef.current) {
-        gsap.fromTo(
-          buttonSweepRef.current,
-          { xPercent: -130, opacity: 0 },
-          { xPercent: 130, opacity: 0.55, duration: 0.48, ease: "power2.out" },
-        );
-      }
-    }
-    if (!mounted || !panelRef.current) return;
+    if (!mounted) return;
+    const id = window.setInterval(() => setTick((t) => t + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [mounted]);
 
+  // The gear-button morph: gear spins out, close spins in (and back). A soft
+  // ring ripples on every toggle for a tactile "click" read.
+  useEffect(() => {
+    const gear = gearIconRef.current;
+    const close = closeIconRef.current;
+    if (!gear || !close) return;
+    gsap.killTweensOf([gear, close, rippleRef.current]);
+
+    if (open) {
+      // gear glides out to the left, the close glides in from the right.
+      gsap
+        .timeline()
+        .to(gear, { x: -20, autoAlpha: 0, duration: 0.26, ease: "power2.in" })
+        .fromTo(
+          close,
+          { x: 20, autoAlpha: 0 },
+          { x: 0, autoAlpha: 1, duration: 0.4, ease: "back.out(1.8)" },
+          "-=0.15",
+        );
+    } else {
+      // reverse: close glides out to the right, the gear glides back from the left.
+      gsap
+        .timeline()
+        .to(close, { x: 20, autoAlpha: 0, duration: 0.24, ease: "power2.in" })
+        .fromTo(
+          gear,
+          { x: -20, autoAlpha: 0 },
+          { x: 0, autoAlpha: 1, duration: 0.42, ease: "back.out(1.7)" },
+          "-=0.13",
+        );
+    }
+
+    if (rippleRef.current) {
+      gsap.fromTo(
+        rippleRef.current,
+        { scale: 0.55, opacity: 0.5 },
+        { scale: 2.1, opacity: 0, duration: 0.6, ease: "power2.out" },
+      );
+    }
+  }, [open]);
+
+  // Panel choreography: spring down + deblur, stagger the rows, sweep a sheen.
+  useEffect(() => {
+    if (!mounted || !panelRef.current) return;
     const panel = panelRef.current;
-    const items = panel.querySelectorAll("[data-settings-item]");
+    const items = panel.querySelectorAll<HTMLElement>("[data-settings-item]");
     gsap.killTweensOf([panel, sweepRef.current, ...Array.from(items)]);
 
     if (open) {
       const tl = gsap.timeline();
       tl.fromTo(
         panel,
-        { autoAlpha: 0, y: -10, scale: 0.975, filter: "blur(10px)" },
-        {
-          autoAlpha: 1,
-          y: 0,
-          scale: 1,
-          filter: "blur(0px)",
-          duration: 0.32,
-          ease: "power3.out",
-        },
+        { autoAlpha: 0, y: -12, scale: 0.96, filter: "blur(12px)", transformOrigin: "top right" },
+        { autoAlpha: 1, y: 0, scale: 1, filter: "blur(0px)", duration: 0.4, ease: "power3.out" },
       ).fromTo(
         items,
-        { autoAlpha: 0, y: 7 },
-        {
-          autoAlpha: 1,
-          y: 0,
-          duration: 0.24,
-          stagger: 0.025,
-          ease: "power2.out",
-        },
-        "-=0.16",
+        { autoAlpha: 0, y: 9 },
+        { autoAlpha: 1, y: 0, duration: 0.3, stagger: 0.04, ease: "power2.out" },
+        "-=0.22",
       );
       if (sweepRef.current) {
         tl.fromTo(
           sweepRef.current,
           { xPercent: -140, opacity: 0 },
-          { xPercent: 145, opacity: 0.5, duration: 0.72, ease: "power2.out" },
-          0.04,
+          { xPercent: 145, opacity: 0.5, duration: 0.85, ease: "power2.out" },
+          0.06,
         );
       }
       return;
     }
 
     gsap
-      .timeline({
-        onComplete: () => setMounted(false),
-      })
+      .timeline({ onComplete: () => setMounted(false) })
       .to(items, {
         autoAlpha: 0,
-        y: 4,
-        duration: 0.14,
-        stagger: { each: 0.012, from: "end" },
+        y: 5,
+        duration: 0.15,
+        stagger: { each: 0.02, from: "end" },
         ease: "power2.in",
       })
       .to(
         panel,
         {
           autoAlpha: 0,
-          y: -8,
-          scale: 0.982,
-          filter: "blur(8px)",
-          duration: 0.2,
+          y: -10,
+          scale: 0.965,
+          filter: "blur(10px)",
+          duration: 0.24,
           ease: "power2.inOut",
         },
-        "-=0.08",
+        "-=0.1",
       );
   }, [mounted, open]);
 
@@ -248,33 +243,40 @@ export default function SettingsMenu({
   );
 
   return (
-    <div ref={rootRef} className="anim-rise absolute right-5 top-5 text-right">
-      <button
-        onClick={() => {
-          if (open) {
-            setOpen(false);
-            return;
-          }
-          setMounted(true);
-          setOpen(true);
-        }}
-        aria-label={open ? "Close" : "Settings"}
-        aria-expanded={open}
-        className="relative grid h-9 w-9 place-items-center overflow-hidden rounded-full border border-white/10 bg-white/[0.06] text-white/70 shadow-lg shadow-black/25 backdrop-blur-xl transition hover:border-[#9fd272]/35 hover:bg-white/10 hover:text-white active:scale-95"
-      >
-        <span
-          ref={buttonSweepRef}
-          className="pointer-events-none absolute inset-y-0 left-0 w-1/2 -skew-x-12 bg-gradient-to-r from-transparent via-white/18 to-transparent opacity-0"
-        />
-        <span className="relative grid h-4 w-4 place-items-center">
-          <span ref={gearIconRef} className="absolute inset-0 grid place-items-center">
-            <SettingsIcon className="h-4 w-4" />
+    <div ref={rootRef} className="anim-slide-right absolute right-5 top-5 text-right">
+      {/* The whole circle gently glides left↔right on a clean, transform-only
+          loop. It eases to a stop while the panel is open so the panel stays put. */}
+      <span className={`gear-float inline-block ${open ? "gear-float--rest" : ""}`}>
+        <button
+          onClick={() => {
+            if (open) {
+              setOpen(false);
+              return;
+            }
+            setMounted(true);
+            setOpen(true);
+          }}
+          aria-label={open ? "Close" : "Settings"}
+          aria-expanded={open}
+          className="settings-gear-btn relative grid h-9 w-9 place-items-center overflow-hidden rounded-full border border-white/10 bg-white/[0.06] text-white/70 shadow-lg shadow-black/25 backdrop-blur-xl transition hover:border-[#9fd272]/40 hover:bg-white/10 hover:text-white active:scale-90"
+        >
+          {/* toggle ripple */}
+          <span
+            ref={rippleRef}
+            className="pointer-events-none absolute inset-0 rounded-full opacity-0 ring-2 ring-[#9fd272]/55"
+          />
+          <span className="relative grid h-4 w-4 place-items-center">
+            <span ref={gearIconRef} className="absolute inset-0 grid place-items-center">
+              <span className="settings-gear-idle grid place-items-center">
+                <SettingsIcon className="h-4 w-4" />
+              </span>
+            </span>
+            <span ref={closeIconRef} className="absolute inset-0 grid place-items-center opacity-0">
+              <CloseIcon className="h-4 w-4" />
+            </span>
           </span>
-          <span ref={closeIconRef} className="absolute inset-0 grid place-items-center opacity-0">
-            <CloseIcon className="h-4 w-4" />
-          </span>
-        </span>
-      </button>
+        </button>
+      </span>
 
       {mounted && (
         <div
@@ -311,7 +313,7 @@ export default function SettingsMenu({
             </div>
           </div>
 
-          <div className="space-y-4 bg-[#0a100d]/78 px-4 pb-4 pt-3.5">
+          <div className="space-y-4 bg-[#0a100d]/78 px-4 pb-3 pt-3.5">
             <div data-settings-item className="grid grid-cols-2 gap-1 rounded-xl border border-white/10 bg-black/28 p-1">
               {(["live", "manual"] as const).map((m) => (
                 <button
@@ -389,6 +391,25 @@ export default function SettingsMenu({
               </div>
             </div>
           </div>
+
+          {/* Sneaky stargazer sync readout — the heartbeat of the live village. */}
+          <div
+            data-settings-item
+            className="flex items-center justify-between border-t border-white/[0.07] bg-black/30 px-4 py-2.5"
+          >
+            <span className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-white/35">
+              <span className="relative grid h-2 w-2 place-items-center">
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${starsLive ? "settings-pulse" : ""}`}
+                  style={{ background: starsLive ? "#7ec85a" : "#6b7280" }}
+                />
+              </span>
+              Stargazers
+            </span>
+            <span className="text-[11px] font-semibold tabular-nums text-white/55">
+              {lastSync ? `synced ${relTime(Date.now() - lastSync)}` : "syncing…"}
+            </span>
+          </div>
         </div>
       )}
 
@@ -400,8 +421,37 @@ export default function SettingsMenu({
           0%, 100% { box-shadow: 0 0 0 0 rgba(126, 200, 90, 0.5); }
           50% { box-shadow: 0 0 0 4px rgba(126, 200, 90, 0); }
         }
+        /* The whole circle glides left↔right — clean, GPU-friendly transform loop. */
+        .gear-float {
+          animation: gear-float 4.2s ease-in-out infinite;
+          will-change: transform;
+          transform: translateX(0);
+        }
+        @keyframes gear-float {
+          0% { transform: translateX(7px); }
+          50% { transform: translateX(-7px); }
+          100% { transform: translateX(7px); }
+        }
+        /* Open → ease the float to rest so the panel stays anchored. */
+        .gear-float--rest {
+          animation: none;
+          transform: translateX(0);
+          transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+        /* The gear is never fully still — a slow, calm idle rotation. */
+        .settings-gear-idle {
+          animation: settings-gear-idle 14s linear infinite;
+        }
+        .settings-gear-btn:hover .settings-gear-idle {
+          animation-duration: 3.2s;
+        }
+        @keyframes settings-gear-idle {
+          to { transform: rotate(360deg); }
+        }
         @media (prefers-reduced-motion: reduce) {
-          .settings-pulse { animation: none; }
+          .settings-pulse,
+          .settings-gear-idle,
+          .gear-float { animation: none; transform: none; }
         }
       `}</style>
     </div>
