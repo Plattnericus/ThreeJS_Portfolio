@@ -3,7 +3,11 @@
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import Hud from "@/components/Hud";
-import SettingsMenu, { type ManualDate } from "@/components/SettingsMenu";
+import SettingsMenu, {
+  type GraphicsQuality,
+  type ManualDate,
+} from "@/components/SettingsMenu";
+import type { ResolvedGraphicsQuality } from "@/components/Experience";
 import SearchBar from "@/components/SearchBar";
 import HouseInterior from "@/components/HouseInterior";
 import MemorialSecret from "@/components/MemorialSecret";
@@ -17,6 +21,7 @@ const DEV_CONTROLS = process.env.NEXT_PUBLIC_DEV_CONTROLS === "true";
 import {
   manualWeather,
   sceneFromWeather,
+  weatherFromApiPayload,
   type Sky,
   type Weather,
 } from "@/lib/weather";
@@ -26,6 +31,28 @@ const Experience = dynamic(() => import("@/components/Experience"), {
   loading: () => <div className="absolute inset-0 bg-[#0b1320]" />,
 });
 
+const STARGAZER_REFRESH_MS = 5 * 60 * 1000;
+const LOADER_INTRO_MS = 900;
+const GRAPHICS_STORAGE_KEY = "star-tree-graphics-quality";
+
+function isGraphicsQuality(value: string | null): value is GraphicsQuality {
+  return value === "auto" || value === "low" || value === "medium" || value === "high";
+}
+
+function detectGraphicsQuality(): ResolvedGraphicsQuality {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return "medium";
+  const nav = navigator as Navigator & { deviceMemory?: number };
+  const narrow = Math.min(window.innerWidth, window.innerHeight) < 820;
+  const touchFirst = navigator.maxTouchPoints > 1 && narrow;
+  const cores = navigator.hardwareConcurrency || 4;
+  const memory = nav.deviceMemory ?? (touchFirst ? 4 : 8);
+  const dpr = window.devicePixelRatio || 1;
+
+  if (touchFirst || cores <= 4 || memory <= 4) return "low";
+  if (cores >= 8 && memory >= 8 && dpr >= 1.5) return "high";
+  return "medium";
+}
+
 export default function Home() {
   const [stars, setStars] = useState(0);
   const [starsLive, setStarsLive] = useState(false);
@@ -33,8 +60,11 @@ export default function Home() {
   // When the stargazer feed was last successfully pulled — surfaced quietly in
   // the settings panel so you can tell how fresh the village is.
   const [lastSync, setLastSync] = useState<number | null>(null);
+  const [nextSync, setNextSync] = useState<number | null>(null);
+  const [starsReady, setStarsReady] = useState(false);
+  const [weatherReady, setWeatherReady] = useState(false);
 
-  // Weather: live reading from Sterzing, plus a manual override mode.
+  // Weather: live reading from Gossensass / Brenner, plus a manual override mode.
   const [liveWeather, setLiveWeather] = useState<Weather | null>(null);
   const [mode, setMode] = useState<"live" | "manual">("live");
   const [manualSky, setManualSky] = useState<Sky>("clear");
@@ -44,9 +74,12 @@ export default function Home() {
   const [selected, setSelected] = useState<number | null>(null);
   const [secretOpen, setSecretOpen] = useState(false);
   const [sceneReady, setSceneReady] = useState(false);
-  // Delay the heavy 3D mount briefly so the loader's draw animation plays on a
-  // free main thread first (GLTF parsing otherwise stutters it).
+  // Let the loader draw first; mount WebGL only after live data is ready.
+  const [loaderIntroDone, setLoaderIntroDone] = useState(false);
   const [mountScene, setMountScene] = useState(false);
+  const [graphicsQuality, setGraphicsQuality] = useState<GraphicsQuality>("auto");
+  const [resolvedGraphicsQuality, setResolvedGraphicsQuality] =
+    useState<ResolvedGraphicsQuality>("medium");
   const now = new Date();
   const [date, setDate] = useState<ManualDate>({
     year: now.getFullYear(),
@@ -56,12 +89,30 @@ export default function Home() {
   });
 
   useEffect(() => {
-    const id = window.setTimeout(() => setMountScene(true), 1300);
+    const id = window.setTimeout(() => setLoaderIntroDone(true), LOADER_INTRO_MS);
     return () => window.clearTimeout(id);
   }, []);
 
   useEffect(() => {
-    // Poll the repo's star count every minute so new stars grow the tree live.
+    const saved = window.localStorage.getItem(GRAPHICS_STORAGE_KEY);
+    if (isGraphicsQuality(saved)) setGraphicsQuality(saved);
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(GRAPHICS_STORAGE_KEY, graphicsQuality);
+    setResolvedGraphicsQuality(
+      graphicsQuality === "auto" ? detectGraphicsQuality() : graphicsQuality,
+    );
+  }, [graphicsQuality]);
+
+  const initialDataReady = starsReady && weatherReady;
+
+  useEffect(() => {
+    if (loaderIntroDone && initialDataReady) setMountScene(true);
+  }, [initialDataReady, loaderIntroDone]);
+
+  useEffect(() => {
+    // Refresh stargazers every 5 minutes so new stars grow the tree live.
     // `no-store` so opening the page always re-checks live with the server
     // (which serves the cron-warmed cache instantly) instead of a stale browser
     // copy — the village is verified fresh right on the loading screen.
@@ -72,29 +123,31 @@ export default function Home() {
           if (typeof d.stars === "number") setStars(d.stars);
           setStarsLive(Boolean(d.live));
           setStargazers(Array.isArray(d.stargazers) ? d.stargazers : null);
-          setLastSync(typeof d.fetchedAt === "number" ? d.fetchedAt : Date.now());
+          const syncedAt = typeof d.fetchedAt === "number" ? d.fetchedAt : Date.now();
+          setLastSync(syncedAt);
+          setNextSync(Date.now() + STARGAZER_REFRESH_MS);
+          setStarsReady(true);
         })
-        .catch(() => {});
+        .catch(() => {
+          setStarsReady(true);
+        });
 
     const loadWeather = () =>
       fetch("/api/weather")
         .then((r) => r.json())
-        .then((d) =>
-          setLiveWeather({
-            tempC: d.tempC,
-            windKmh: d.windKmh,
-            cloud: d.cloud,
-            hour: d.hour,
-            sky: d.sky,
-            live: d.live,
-          }),
-        )
-        .catch(() => {});
+        .then((d) => {
+          setLiveWeather(weatherFromApiPayload(d));
+          setWeatherReady(true);
+        })
+        .catch(() => {
+          setLiveWeather(manualWeather(13, new Date().getMonth(), "clouds"));
+          setWeatherReady(true);
+        });
 
     loadStars();
     loadWeather();
-    // Poll every minute in production; skip in dev so the +/- editor isn't reset.
-    const starId = DEV_CONTROLS ? null : setInterval(loadStars, 60 * 1000);
+    // Match the server cache window: refresh the live village every 5 minutes.
+    const starId = DEV_CONTROLS ? null : setInterval(loadStars, STARGAZER_REFRESH_MS);
     const weatherId = setInterval(loadWeather, 10 * 60 * 1000);
     return () => {
       if (starId) clearInterval(starId);
@@ -110,14 +163,7 @@ export default function Home() {
   const params = useMemo(
     () =>
       sceneFromWeather(
-        weather ?? {
-          tempC: 14,
-          windKmh: 8,
-          cloud: 0.3,
-          hour: 13,
-          sky: "clear",
-          live: false,
-        },
+        weather ?? manualWeather(13, new Date().getMonth(), "clouds"),
       ),
     [weather],
   );
@@ -167,13 +213,19 @@ export default function Home() {
             highlight={highlight}
             fly={fly}
             stargazers={stargazers}
+            graphicsQuality={resolvedGraphicsQuality}
             onSelectHouse={setSelected}
             onFindDove={() => setSecretOpen(true)}
             onReady={() => setSceneReady(true)}
           />
         )}
       </div>
-      <LoadingOverlay sceneReady={sceneReady} />
+      <LoadingOverlay
+        sceneReady={sceneReady}
+        dataReady={initialDataReady}
+        starsReady={starsReady}
+        weatherReady={weatherReady}
+      />
       {secretOpen && <MemorialSecret onClose={() => setSecretOpen(false)} />}
 
       <div
@@ -196,7 +248,7 @@ export default function Home() {
 
         <button
           onClick={() => setFly((f) => !f)}
-          className={`anim-rise-x absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border px-4 py-2 text-xs backdrop-blur-xl transition active:scale-95 ${
+          className={`anim-rise-x absolute bottom-20 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border px-4 py-2 text-xs backdrop-blur-xl transition active:scale-95 sm:bottom-6 ${
             fly
               ? "border-white/25 bg-white/15 text-white"
               : "border-white/10 bg-white/[0.06] text-white/70 hover:bg-white/10 hover:text-white"
@@ -206,8 +258,8 @@ export default function Home() {
           {fly ? "Exit fly mode" : "Fly around"}
         </button>
         {fly && (
-          <div className="pointer-events-none absolute bottom-16 left-1/2 -translate-x-1/2 text-center text-[11px] text-white/45">
-            WASD / arrows to move · drag to look · R / F up &amp; down
+          <div className="pointer-events-none absolute bottom-32 left-1/2 -translate-x-1/2 text-center text-[11px] text-white/45 sm:bottom-16">
+            Click scene to lock look · WASD / arrows move · R / F up &amp; down · Esc releases
           </div>
         )}
 
@@ -230,9 +282,13 @@ export default function Home() {
           manualSky={manualSky}
           starsLive={starsLive}
           lastSync={lastSync}
+          nextSync={nextSync}
+          graphicsQuality={graphicsQuality}
+          resolvedGraphicsQuality={resolvedGraphicsQuality}
           onMode={setMode}
           onDate={setDate}
           onSky={setManualSky}
+          onGraphicsQuality={setGraphicsQuality}
         />
       </div>
     </main>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, type ThreeEvent } from "@react-three/fiber";
 import { Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
@@ -172,6 +172,7 @@ function House({
   name,
   makeBuilding,
   lanternScene,
+  interactive,
   onSelect,
   setRef,
 }: {
@@ -183,6 +184,7 @@ function House({
   name: string;
   makeBuilding: BuildFn;
   lanternScene: THREE.Object3D;
+  interactive: boolean;
   onSelect?: (i: number) => void;
   setRef: (i: number, g: THREE.Group | null) => void;
 }) {
@@ -246,28 +248,33 @@ function House({
   }, [hovered, built]);
 
   const lightsOn = night > 0.04;
+  const eventHandlers = interactive
+    ? {
+        onClick: (e: ThreeEvent<MouseEvent>) => {
+          if (!active) return;
+          e.stopPropagation();
+          onSelect?.(i);
+        },
+        onPointerOver: (e: ThreeEvent<PointerEvent>) => {
+          if (!active) return;
+          e.stopPropagation();
+          setHovered(true);
+          document.body.style.cursor = "pointer";
+        },
+        onPointerOut: (e: ThreeEvent<PointerEvent>) => {
+          e.stopPropagation();
+          setHovered(false);
+          document.body.style.cursor = "auto";
+        },
+      }
+    : {};
   return (
     <group
       ref={(g) => setRef(i, g)}
       position={anchor.pos}
       rotation={[0, i * 1.7, 0]}
       scale={0}
-      onClick={(e) => {
-        if (!active) return;
-        e.stopPropagation();
-        onSelect?.(i);
-      }}
-      onPointerOver={(e) => {
-        if (!active) return;
-        e.stopPropagation();
-        setHovered(true);
-        document.body.style.cursor = "pointer";
-      }}
-      onPointerOut={(e) => {
-        e.stopPropagation();
-        setHovered(false);
-        document.body.style.cursor = "auto";
-      }}
+      {...eventHandlers}
     >
       <group ref={innerRef}>
         {built.platform && <primitive object={built.platform} />}
@@ -383,6 +390,7 @@ export function Houses({
   highlight = -1,
   night = 0,
   stargazers = null,
+  interactive = true,
   onSelect,
 }: {
   stars: number;
@@ -390,6 +398,7 @@ export function Houses({
   highlight?: number;
   night?: number;
   stargazers?: Stargazer[] | null;
+  interactive?: boolean;
   onSelect?: (i: number) => void;
 }) {
   const makeBuilding = useBuildingFactory();
@@ -428,6 +437,7 @@ export function Houses({
           name={stargazers?.[i]?.login ?? nameForIndex(i)}
           makeBuilding={makeBuilding}
           lanternScene={lanternScene}
+          interactive={interactive}
           onSelect={onSelect}
           setRef={(idx, g) => {
             groups.current[idx] = g;

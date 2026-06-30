@@ -10,9 +10,13 @@ import type { SceneParams } from "@/lib/weather";
 const NIGHT_H = new THREE.Color("#1b2330");
 const DAY_H = new THREE.Color("#b8d3df");
 const SUNSET_H = new THREE.Color("#e88b4d");
+const RAIN_H = new THREE.Color("#6f7f89");
+const STORM_H = new THREE.Color("#3b4254");
 const NIGHT_Z = new THREE.Color("#0b1020");
 const DAY_Z = new THREE.Color("#477fa7");
 const SUNSET_Z = new THREE.Color("#5b4f72");
+const RAIN_Z = new THREE.Color("#2e4b60");
+const STORM_Z = new THREE.Color("#161b2a");
 
 /**
  * A big sky dome (follows the camera) with a custom gradient + sun-glow shader.
@@ -100,6 +104,12 @@ export function Sky({ params }: { params: SceneParams }) {
 
     tH.copy(NIGHT_H).lerp(DAY_H, day).lerp(SUNSET_H, warm);
     tZ.copy(NIGHT_Z).lerp(DAY_Z, day).lerp(SUNSET_Z, warm * 0.7);
+    const rainMood =
+      params.precip === "rain"
+        ? THREE.MathUtils.clamp(0.45 + params.precipIntensity * 0.42 + (params.storm ? 0.18 : 0), 0, 0.96)
+        : 0;
+    tH.lerp(params.storm ? STORM_H : RAIN_H, rainMood);
+    tZ.lerp(params.storm ? STORM_Z : RAIN_Z, rainMood);
 
     const k = Math.min(1, dt * 1.5);
     cur.current.h.lerp(tH, k);

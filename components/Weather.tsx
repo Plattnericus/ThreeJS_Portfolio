@@ -12,7 +12,17 @@ const MAX_SNOW = 900;
 
 // Snow — soft drifting points. Fixed-size buffer + draw range so changing the
 // intensity never resizes a GPU attribute (three.js forbids that).
-function Snow({ intensity, wind }: { intensity: number; wind: number }) {
+function Snow({
+  intensity,
+  wind,
+  gust,
+  windVec,
+}: {
+  intensity: number;
+  wind: number;
+  gust: number;
+  windVec: [number, number];
+}) {
   const ref = useRef<THREE.Points>(null);
   const count = Math.max(1, Math.floor(MAX_SNOW * intensity));
 
@@ -33,15 +43,27 @@ function Snow({ intensity, wind }: { intensity: number; wind: number }) {
     if (!pts) return;
     const arr = pts.geometry.attributes.position.array as Float32Array;
     const t = state.clock.elapsedTime;
+    const wx = windVec[0];
+    const wz = windVec[1];
+    const sx = -wz;
+    const sz = wx;
+    const flow = wind + gust * 0.28;
     for (let i = 0; i < count; i++) {
       const yi = i * 3 + 1;
       arr[yi] -= speeds[i] * dt;
-      arr[i * 3] += wind * dt * 1.2 + Math.sin(t + i) * dt * 0.4;
+      const swirl = Math.sin(t + i) * dt * 0.35;
+      arr[i * 3] += wx * flow * dt * 1.2 + sx * swirl;
+      arr[i * 3 + 2] += wz * flow * dt * 1.2 + sz * swirl;
       if (arr[yi] < -10) {
         arr[yi] = TOP;
         arr[i * 3] = (Math.random() - 0.5) * AREA * 2;
         arr[i * 3 + 2] = (Math.random() - 0.5) * AREA * 2;
-      } else if (arr[i * 3] > AREA) arr[i * 3] = -AREA;
+      } else {
+        if (arr[i * 3] > AREA) arr[i * 3] = -AREA;
+        else if (arr[i * 3] < -AREA) arr[i * 3] = AREA;
+        if (arr[i * 3 + 2] > AREA) arr[i * 3 + 2] = -AREA;
+        else if (arr[i * 3 + 2] < -AREA) arr[i * 3 + 2] = AREA;
+      }
     }
     pts.geometry.attributes.position.needsUpdate = true;
     pts.geometry.setDrawRange(0, count);
@@ -59,11 +81,21 @@ function Snow({ intensity, wind }: { intensity: number; wind: number }) {
 
 // Rain — falling streaks (two verts per drop) slanted by the wind. Heavier and
 // faster than snow; opacity/length scale up toward a storm.
-function Rain({ intensity, wind }: { intensity: number; wind: number }) {
+function Rain({
+  intensity,
+  wind,
+  gust,
+  windVec,
+}: {
+  intensity: number;
+  wind: number;
+  gust: number;
+  windVec: [number, number];
+}) {
   const ref = useRef<THREE.LineSegments>(null);
   const count = Math.max(1, Math.floor(MAX_RAIN * Math.max(0.35, intensity)));
   const len = 1.1 + intensity * 1.6; // streak length
-  const slant = THREE.MathUtils.clamp(wind * 0.5, 0, 2.4);
+  const slant = THREE.MathUtils.clamp((wind + gust * 0.32) * 0.5, 0, 2.4);
 
   const { positions, speeds } = useMemo(() => {
     const positions = new Float32Array(MAX_RAIN * 6);
@@ -87,22 +119,30 @@ function Rain({ intensity, wind }: { intensity: number; wind: number }) {
     const seg = ref.current;
     if (!seg) return;
     const arr = seg.geometry.attributes.position.array as Float32Array;
-    const dx = slant * len * 0.4;
+    const flow = wind + gust * 0.32;
+    const dx = windVec[0] * slant * len * 0.4;
+    const dz = windVec[1] * slant * len * 0.4;
     for (let i = 0; i < count; i++) {
       const o = i * 6;
-      let x = arr[o] + wind * dt * 3.2;
+      let x = arr[o] + windVec[0] * flow * dt * 3.2;
       let y = arr[o + 1] - speeds[i] * dt;
-      const z = arr[o + 2];
+      let z = arr[o + 2] + windVec[1] * flow * dt * 3.2;
       if (y < -8) {
         y = TOP + Math.random() * 6;
         x = (Math.random() - 0.5) * AREA * 2;
-        arr[o + 2] = (Math.random() - 0.5) * AREA * 2;
-      } else if (x > AREA) x = -AREA;
+        z = (Math.random() - 0.5) * AREA * 2;
+      } else {
+        if (x > AREA) x = -AREA;
+        else if (x < -AREA) x = AREA;
+        if (z > AREA) z = -AREA;
+        else if (z < -AREA) z = AREA;
+      }
       arr[o] = x;
       arr[o + 1] = y;
+      arr[o + 2] = z;
       arr[o + 3] = x - dx;
       arr[o + 4] = y - len;
-      arr[o + 5] = z;
+      arr[o + 5] = z - dz;
     }
     seg.geometry.attributes.position.needsUpdate = true;
     seg.geometry.setDrawRange(0, count * 2);
@@ -160,9 +200,15 @@ function makePuffGeometry(seed: number) {
 function StormClouds({
   active,
   flashRef,
+  wind,
+  gust,
+  windVec,
 }: {
   active: boolean;
   flashRef: React.MutableRefObject<number>;
+  wind: number;
+  gust: number;
+  windVec: [number, number];
 }) {
   const layout = useMemo(
     () =>
@@ -202,8 +248,13 @@ function StormClouds({
       const s = g.scale.x + (target - g.scale.x) * Math.min(1, dt * 3);
       g.scale.setScalar(s);
       const l = layout[i];
-      g.position.x = l.pos[0] + Math.sin(t * 0.07 * l.drift + l.phase) * 4;
+      const drift = Math.sin(t * 0.07 * l.drift + l.phase) * (3 + wind * 0.7 + gust * 0.35);
+      const cross = Math.cos(t * 0.052 * l.drift + l.phase) * 1.5;
+      const sx = -windVec[1];
+      const sz = windVec[0];
+      g.position.x = l.pos[0] + windVec[0] * drift + sx * cross;
       g.position.y = l.pos[1] + Math.sin(t * 0.4 + l.phase) * 0.6;
+      g.position.z = l.pos[2] + windVec[1] * drift + sz * cross;
     }
   });
 
@@ -310,11 +361,15 @@ export function Weather({
   precip,
   intensity,
   wind,
+  gust = 0,
+  windVec = [1, 0],
   storm = false,
 }: {
   precip: Precip;
   intensity: number;
   wind: number;
+  gust?: number;
+  windVec?: [number, number];
   storm?: boolean;
 }) {
   const flashRef = useRef(0);
@@ -322,9 +377,9 @@ export function Weather({
 
   return (
     <>
-      {precip === "snow" && <Snow intensity={intensity} wind={wind} />}
-      {isRain && <Rain intensity={intensity} wind={wind} />}
-      <StormClouds active={isRain} flashRef={flashRef} />
+      {precip === "snow" && <Snow intensity={intensity} wind={wind} gust={gust} windVec={windVec} />}
+      {isRain && <Rain intensity={intensity} wind={wind} gust={gust} windVec={windVec} />}
+      <StormClouds active={isRain} flashRef={flashRef} wind={wind} gust={gust} windVec={windVec} />
       {storm && <Lightning flashRef={flashRef} />}
     </>
   );

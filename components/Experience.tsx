@@ -1,16 +1,13 @@
 "use client";
 
-import { Suspense, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import {
   Float,
   OrbitControls,
-  Cloud,
-  Clouds,
   PerformanceMonitor,
   Preload,
   useGLTF,
-  useTexture,
 } from "@react-three/drei";
 import * as THREE from "three";
 import { sampleIslandSurface } from "@/lib/surface";
@@ -32,26 +29,10 @@ import { Sky } from "./Sky";
 import { CozyFlyControls } from "./CozyFlyControls";
 import { treeHeight } from "@/lib/growth";
 import { spineAt } from "@/lib/bonsai";
-import type { SceneParams } from "@/lib/weather";
+import type { CloudLayerParams, SceneParams } from "@/lib/weather";
 import type { Stargazer } from "@/lib/stargazers";
 
-// A ring of clouds wrapping the scene so the sky reads full from any angle.
-const CLOUD_LAYOUT = [
-  { pos: [-18, 20, -24], bounds: [18, 5, 9], volume: 18, growth: 7 },
-  { pos: [8, 24, -30], bounds: [22, 6, 10], volume: 20, growth: 8 },
-  { pos: [28, 21, -20], bounds: [18, 5, 9], volume: 16, growth: 7 },
-  { pos: [-34, 27, -36], bounds: [24, 7, 12], volume: 20, growth: 8 },
-  { pos: [4, 34, -54], bounds: [30, 8, 14], volume: 24, growth: 9 },
-  { pos: [42, 28, -40], bounds: [24, 7, 12], volume: 19, growth: 8 },
-  { pos: [-52, 24, -4], bounds: [20, 6, 11], volume: 16, growth: 7 },
-  { pos: [55, 22, 8], bounds: [20, 6, 11], volume: 16, growth: 7 },
-  { pos: [34, 33, 42], bounds: [24, 7, 12], volume: 18, growth: 8 },
-  { pos: [-22, 28, 50], bounds: [22, 6, 11], volume: 17, growth: 7 },
-  { pos: [-54, 31, 30], bounds: [20, 6, 11], volume: 16, growth: 7 },
-  { pos: [0, 26, 44], bounds: [18, 4, 8], volume: 9, growth: 6 },
-] as const;
-
-// Island shrunk ~20%; the tree/grass sit on its (now lower) plateau.
+// Shared scene scale for the island and tree.
 const ISLAND_SCALE = 0.8;
 const TREE_Y = 7.35 * ISLAND_SCALE;
 const TREE_BOOST = 1.15;
@@ -73,84 +54,264 @@ const MODEL_ASSETS = [
 
 function AssetGate() {
   useGLTF(MODEL_ASSETS);
-  useTexture("/cloud.png");
   return null;
 }
 
-// Clouds that DRIFT across the sky on the wind and CYCLE smoothly with the
-// weather: bright fluffy banks when clear/cloudy, darkening into a heavy grey
-// storm deck during a thunderstorm (the bright clouds "go away"). Drift wraps far
-// off-screen so it's endless; cover/storm ease so weather changes fade, not snap.
-const CLOUD_DRIFT_RANGE = 150;
-function DriftingClouds({ params }: { params: SceneParams }) {
-  const refs = useRef<(THREE.Group | null)[]>([]);
-  const eased = useRef({ cover: params.cloud, storm: params.storm ? 1 : 0 });
-  const acc = useRef(0);
-  // Throttled "visible" look — re-renders only a few times/sec while a transition
-  // is in flight, then settles (no per-frame React churn).
-  const [look, setLook] = useState(() => ({
-    cover: params.cloud,
-    storm: params.storm ? 1 : 0,
-  }));
+const CLOUD_RANGE = 118;
+
+export type ResolvedGraphicsQuality = "low" | "medium" | "high";
+
+const QUALITY_CONFIG = {
+  low: {
+    minDpr: 0.72,
+    idleDpr: 0.92,
+    maxDpr: 1.05,
+    movingDpr: 0.86,
+    idleCloudQuality: 0.34,
+    movingCloudQuality: 0.08,
+    grassBlades: 12000,
+    grassTufts: 0,
+  },
+  medium: {
+    minDpr: 0.9,
+    idleDpr: 1.28,
+    maxDpr: 1.45,
+    movingDpr: 1.1,
+    idleCloudQuality: 0.54,
+    movingCloudQuality: 0.12,
+    grassBlades: 20000,
+    grassTufts: 1,
+  },
+  high: {
+    minDpr: 1.08,
+    idleDpr: 1.65,
+    maxDpr: 1.9,
+    movingDpr: 1.35,
+    idleCloudQuality: 0.74,
+    movingCloudQuality: 0.16,
+    grassBlades: 26000,
+    grassTufts: 1,
+  },
+} satisfies Record<
+  ResolvedGraphicsQuality,
+  {
+    minDpr: number;
+    idleDpr: number;
+    maxDpr: number;
+    movingDpr: number;
+    idleCloudQuality: number;
+    movingCloudQuality: number;
+    grassBlades: number;
+    grassTufts: number;
+  }
+>;
+const CLOUD_VERTEX = /* glsl */ `
+  varying vec3 vWorldPos;
+  void main() {
+    vec4 world = modelMatrix * vec4(position, 1.0);
+    vWorldPos = world.xyz;
+    gl_Position = projectionMatrix * viewMatrix * world;
+  }
+`;
+
+const CLOUD_FRAGMENT = /* glsl */ `
+  precision highp float;
+  uniform float uTime;
+  uniform float uCoverage;
+  uniform float uDensity;
+  uniform float uHeight;
+  uniform float uThickness;
+  uniform float uScale;
+  uniform float uOpacity;
+  uniform float uSpeed;
+  uniform float uDetail;
+  uniform float uSteps;
+  uniform float uRange;
+  uniform float uFog;
+  uniform float uDay;
+  uniform vec2 uWindDir;
+  uniform vec3 uBaseColor;
+  uniform vec3 uShadowColor;
+  uniform vec3 uSunDir;
+  varying vec3 vWorldPos;
+
+  float hash(vec3 p) {
+    p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3));
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+  }
+
+  float noise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(mix(hash(i + vec3(0,0,0)), hash(i + vec3(1,0,0)), f.x),
+          mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+      mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
+          mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y),
+      f.z
+    );
+  }
+
+  float fbm(vec3 p) {
+    float v = 0.0;
+    float a = 0.55;
+    for (int i = 0; i < 5; i++) {
+      v += noise(p) * a;
+      p = p * 2.07 + vec3(13.1, 7.7, 4.9);
+      a *= 0.48;
+    }
+    return v;
+  }
+
+  vec2 boxHit(vec3 ro, vec3 rd, vec3 mn, vec3 mx) {
+    vec3 inv = 1.0 / rd;
+    vec3 t0 = (mn - ro) * inv;
+    vec3 t1 = (mx - ro) * inv;
+    vec3 tmin = min(t0, t1);
+    vec3 tmax = max(t0, t1);
+    return vec2(max(max(tmin.x, tmin.y), tmin.z), min(min(tmax.x, tmax.y), tmax.z));
+  }
+
+  void main() {
+    if (uCoverage < 0.015 || uDensity < 0.01 || uOpacity < 0.01) discard;
+    vec3 ro = cameraPosition;
+    vec3 rd = normalize(vWorldPos - ro);
+    vec3 mn = vec3(-uRange, uHeight - uThickness * 0.5, -uRange);
+    vec3 mx = vec3(uRange, uHeight + uThickness * 0.5, uRange);
+    vec2 hit = boxHit(ro, rd, mn, mx);
+    if (hit.x > hit.y || hit.y < 0.0) discard;
+
+    float start = max(hit.x, 0.0);
+    float end = hit.y;
+    float rayLen = min(end - start, 95.0);
+    if (rayLen <= 0.0) discard;
+
+    float steps = clamp(uSteps, 6.0, 22.0);
+    float stride = rayLen / steps;
+    vec2 wind = normalize(uWindDir);
+    vec3 color = vec3(0.0);
+    float alpha = 0.0;
+    float threshold = mix(0.86, 0.32, clamp(uCoverage, 0.0, 1.0));
+
+    for (int i = 0; i < 24; i++) {
+      if (float(i) >= steps || alpha > 0.965) break;
+      float fi = (float(i) + 0.5) / steps;
+      vec3 p = ro + rd * (start + fi * rayLen);
+      float vertical = 1.0 - abs(p.y - uHeight) / max(0.001, uThickness * 0.5);
+      vertical = smoothstep(0.0, 0.72, vertical);
+      vec2 drift = wind * uTime * uSpeed;
+      vec3 q = vec3((p.xz + drift).x * uScale, p.y * uScale * 0.42, (p.xz + drift).y * uScale);
+      float large = fbm(q * 0.68);
+      float detail = fbm(q * (2.0 + uDetail));
+      float n = mix(large, detail, 0.33);
+      float edge = smoothstep(threshold, threshold + 0.23, n) * vertical;
+      float d = edge * uDensity;
+      float a = 1.0 - exp(-d * stride * 0.075);
+      a *= (1.0 - alpha);
+      float light = clamp(dot(normalize(vec3(wind.x * 0.2, 0.6, wind.y * 0.2) + uSunDir * 0.45), uSunDir) * 0.5 + 0.5, 0.0, 1.0);
+      vec3 sampleColor = mix(uShadowColor, uBaseColor, 0.42 + light * 0.42 + vertical * 0.16);
+      color += sampleColor * a;
+      alpha += a;
+    }
+
+    alpha *= uOpacity;
+    alpha *= 1.0 - clamp(uFog * 0.18, 0.0, 0.18);
+    if (alpha < 0.012) discard;
+    gl_FragColor = vec4(color / max(alpha, 0.001), alpha);
+  }
+`;
+
+function CloudVolumeLayer({
+  layer,
+  params,
+  quality,
+  order,
+}: {
+  layer: CloudLayerParams;
+  params: SceneParams;
+  quality: number;
+  order: number;
+}) {
+  const material = useRef<THREE.ShaderMaterial>(null);
+  const uniforms = useMemo(
+    () => ({
+      uTime: { value: 0 },
+      uCoverage: { value: layer.coverage },
+      uDensity: { value: layer.density },
+      uHeight: { value: layer.height },
+      uThickness: { value: layer.thickness },
+      uScale: { value: layer.scale },
+      uOpacity: { value: layer.opacity },
+      uSpeed: { value: layer.speed },
+      uDetail: { value: layer.detail },
+      uSteps: { value: 18 },
+      uRange: { value: CLOUD_RANGE },
+      uFog: { value: params.clouds.fog },
+      uDay: { value: params.dayFactor },
+      uWindDir: { value: new THREE.Vector2(params.windVec[0], params.windVec[1]) },
+      uBaseColor: { value: new THREE.Color(params.clouds.baseColor) },
+      uShadowColor: { value: new THREE.Color(params.clouds.shadowColor) },
+      uSunDir: { value: new THREE.Vector3(...params.sunPos).normalize() },
+    }),
+    [],
+  );
 
   useFrame((_, dt) => {
-    const d = Math.min(dt, 0.05);
-    // (1) endless wind drift — wraps far from the camera so the loop is invisible.
-    const drift = (0.5 + params.wind * 1.0) * d;
-    const half = CLOUD_DRIFT_RANGE / 2;
-    for (const g of refs.current) {
-      if (!g) continue;
-      g.position.x += drift;
-      if (g.position.x > half) g.position.x -= CLOUD_DRIFT_RANGE;
-    }
-    // (2) ease cover/storm toward the live targets so weather cycles smoothly.
-    const e = eased.current;
-    const k = Math.min(1, d * 0.7);
-    e.cover += (params.cloud - e.cover) * k;
-    e.storm += ((params.storm ? 1 : 0) - e.storm) * k;
-    // (3) push to props at ~8 Hz until settled.
-    acc.current += d;
-    if (acc.current >= 0.12) {
-      acc.current = 0;
-      if (Math.abs(e.cover - look.cover) > 0.004 || Math.abs(e.storm - look.storm) > 0.004) {
-        setLook({ cover: e.cover, storm: e.storm });
-      }
-    }
+    const m = material.current;
+    if (!m) return;
+    const k = Math.min(1, dt * 0.9);
+    m.uniforms.uTime.value = _.clock.elapsedTime;
+    m.uniforms.uCoverage.value += (layer.coverage - m.uniforms.uCoverage.value) * k;
+    m.uniforms.uDensity.value += (layer.density - m.uniforms.uDensity.value) * k;
+    m.uniforms.uOpacity.value += (layer.opacity - m.uniforms.uOpacity.value) * k;
+    m.uniforms.uSpeed.value += (layer.speed * (1 + params.gust * 0.18) - m.uniforms.uSpeed.value) * k;
+    m.uniforms.uFog.value += (params.clouds.fog - m.uniforms.uFog.value) * k;
+    m.uniforms.uDay.value += (params.dayFactor - m.uniforms.uDay.value) * k;
+    m.uniforms.uSteps.value = Math.round(THREE.MathUtils.lerp(6, 18, quality));
+    (m.uniforms.uWindDir.value as THREE.Vector2).set(params.windVec[0], params.windVec[1]).normalize();
+    (m.uniforms.uBaseColor.value as THREE.Color).set(params.clouds.baseColor);
+    (m.uniforms.uShadowColor.value as THREE.Color).set(params.clouds.shadowColor);
+    (m.uniforms.uSunDir.value as THREE.Vector3).set(...params.sunPos).normalize();
   });
 
-  // bright (clear) → grey (cloudy) → dark heavy deck (storm). In a storm the bright
-  // clouds are fully replaced by the dark storm colour.
-  const color =
-    "#" +
-    new THREE.Color("#f5f2ec")
-      .lerp(new THREE.Color("#8c98a0"), Math.min(1, look.cover * 1.1))
-      .lerp(new THREE.Color("#39424b"), look.storm)
-      .getHexString();
-  const opacity = THREE.MathUtils.lerp(0.26, 0.82, Math.max(look.cover, look.storm * 0.95));
-  const churn = 0.12 + params.wind * 0.05 + look.storm * 0.28; // storms roil more
+  return (
+    <mesh position={[0, layer.height, 0]} renderOrder={order} frustumCulled={false}>
+      <boxGeometry args={[CLOUD_RANGE * 2, layer.thickness, CLOUD_RANGE * 2, 1, 1, 1]} />
+      <shaderMaterial
+        ref={material}
+        uniforms={uniforms}
+        vertexShader={CLOUD_VERTEX}
+        fragmentShader={CLOUD_FRAGMENT}
+        transparent
+        depthWrite={false}
+        depthTest
+        side={THREE.BackSide}
+      />
+    </mesh>
+  );
+}
+
+function VolumetricClouds({
+  params,
+  quality,
+  moving,
+}: {
+  params: SceneParams;
+  quality: number;
+  moving: boolean;
+}) {
+  if (moving) {
+    return <CloudVolumeLayer layer={params.clouds.mid} params={params} quality={quality} order={-2} />;
+  }
 
   return (
-    <Clouds material={THREE.MeshBasicMaterial} texture="/cloud.png" limit={650}>
-      {CLOUD_LAYOUT.map((c, i) => (
-        <group
-          key={i}
-          ref={(g) => {
-            refs.current[i] = g;
-          }}
-        >
-          <Cloud
-            seed={i + 1}
-            position={c.pos as unknown as [number, number, number]}
-            bounds={c.bounds as unknown as [number, number, number]}
-            volume={c.volume}
-            growth={c.growth}
-            color={color}
-            opacity={opacity}
-            speed={churn}
-          />
-        </group>
-      ))}
-    </Clouds>
+    <group>
+      <CloudVolumeLayer layer={params.clouds.high} params={params} quality={quality * 0.84} order={-3} />
+      <CloudVolumeLayer layer={params.clouds.mid} params={params} quality={quality} order={-2} />
+      <CloudVolumeLayer layer={params.clouds.low} params={params} quality={quality * 0.92} order={-1} />
+    </group>
   );
 }
 
@@ -164,16 +325,23 @@ function SceneReadySignal({ onReady }: { onReady?: () => void }) {
   return null;
 }
 
-// Carpets the island top with grass + flowers placed on the REAL surface (a
-// raycast height profile), so coverage reaches the true edge with no bald ground.
+// Fills the island plateau using the sampled island surface.
 function Plateau({
   wind,
+  gust,
+  windVec,
   night,
   season,
+  grassBlades,
+  grassTufts,
 }: {
   wind: number;
+  gust: number;
+  windVec: [number, number];
   night: number;
   season: SceneParams["season"];
+  grassBlades: number;
+  grassTufts: number;
 }) {
   const { scene } = useGLTF("/models/island.glb");
   const surface = useMemo(
@@ -182,11 +350,11 @@ function Plateau({
   );
   return (
     <>
-      <Grass wind={wind} surface={surface} />
-      <GrassClumps wind={wind} count={6} surface={surface} />
+      <Grass wind={wind} gust={gust} windVec={windVec} count={grassBlades} surface={surface} />
+      <GrassClumps wind={wind} gust={gust} windVec={windVec} count={grassTufts} surface={surface} />
       <Flora radius={PLATEAU_R + 2} surface={surface} />
       <Fireflies night={night} baseY={PLATEAU_Y - 0.5} radius={PLATEAU_R + 1} height={11} />
-      <FallingLeaves wind={wind} season={season} surface={surface} treeY={TREE_Y} radius={PLATEAU_R + 2} />
+      <FallingLeaves wind={wind} gust={gust} windVec={windVec} season={season} surface={surface} treeY={TREE_Y} radius={PLATEAU_R + 2} />
     </>
   );
 }
@@ -197,6 +365,7 @@ export default function Experience({
   highlight = -1,
   fly = false,
   stargazers = null,
+  graphicsQuality = "medium",
   onSelectHouse,
   onFindDove,
   onReady,
@@ -206,18 +375,50 @@ export default function Experience({
   highlight?: number;
   fly?: boolean;
   stargazers?: Stargazer[] | null;
+  graphicsQuality?: ResolvedGraphicsQuality;
   onSelectHouse?: (i: number) => void;
   onFindDove?: () => void;
   onReady?: () => void;
 }) {
-  // Night factor (lights come on at dusk). Sun disc sits far along the sun dir.
+  const quality = QUALITY_CONFIG[graphicsQuality];
+  // Night factor drives warm lights and fireflies.
   const night = Math.min(1, Math.max(0, 1 - params.dayFactor * 1.5));
   const sunDir = new THREE.Vector3(...params.sunPos).normalize();
   const sunFar = sunDir.multiplyScalar(120);
-  // Resolution auto-scales to hold the framerate (PerformanceMonitor below).
-  const [dpr, setDpr] = useState(1.5);
-  // Frame the spiral tower: it grows taller with stars, so aim at its mid-height
-  // and let the user pull back far enough to see the whole thing.
+  // Quality presets keep motion responsive without dropping the scene into a visibly pixelated state.
+  const [dpr, setDpr] = useState(quality.idleDpr);
+  const [cloudQuality, setCloudQuality] = useState(quality.idleCloudQuality);
+  const [cameraMoving, setCameraMoving] = useState(false);
+  const settleTimer = useRef<number | null>(null);
+  const performanceMoving = fly || cameraMoving;
+  const effectiveDpr = performanceMoving
+    ? Math.min(dpr, quality.movingDpr)
+    : Math.min(dpr, quality.maxDpr);
+  const effectiveCloudQuality = performanceMoving
+    ? Math.min(cloudQuality, quality.movingCloudQuality)
+    : cloudQuality;
+
+  useEffect(() => {
+    setDpr(quality.idleDpr);
+    setCloudQuality(quality.idleCloudQuality);
+  }, [quality.idleCloudQuality, quality.idleDpr]);
+
+  useEffect(() => {
+    return () => {
+      if (settleTimer.current !== null) window.clearTimeout(settleTimer.current);
+    };
+  }, []);
+
+  const markCameraMoving = () => {
+    setCameraMoving(true);
+    if (settleTimer.current !== null) window.clearTimeout(settleTimer.current);
+  };
+
+  const markCameraSettling = () => {
+    if (settleTimer.current !== null) window.clearTimeout(settleTimer.current);
+    settleTimer.current = window.setTimeout(() => setCameraMoving(false), 420);
+  };
+  // Orbit around the current trunk center.
   const worldH = treeHeight(stars) * TREE_BOOST;
   const trunkTargetLocal = spineAt(Math.max(3.8, treeHeight(stars) * 0.52));
   const orbitTarget: [number, number, number] = [
@@ -229,10 +430,16 @@ export default function Experience({
 
   return (
     <Canvas
-      shadows="soft"
-      dpr={dpr}
+      key={graphicsQuality}
+      shadows
+      dpr={effectiveDpr}
       camera={{ position: [26, 18, 26], fov: 42, near: 0.1, far: 600 }}
-      gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
+      gl={{
+        antialias: graphicsQuality === "high",
+        alpha: false,
+        powerPreference: "high-performance",
+      }}
+      performance={{ min: 0.55 }}
       onCreated={({ gl }) => {
         gl.shadowMap.enabled = true;
         gl.shadowMap.type = THREE.PCFShadowMap;
@@ -243,22 +450,28 @@ export default function Experience({
     >
       <Suspense fallback={null}>
         <AssetGate />
-        {/* Hold a high framerate by trading resolution: drop dpr when fps sags,
-            restore it when it recovers (no AdaptiveDpr — autorotate would pin it
-            regressed). */}
+        {/* Adaptive resolution keeps animation responsive. */}
         <PerformanceMonitor
-          bounds={() => [90, 140]}
+          bounds={() => [52, 72]}
           flipflops={4}
-          onDecline={() => setDpr((d) => Math.max(0.85, +(d - 0.2).toFixed(2)))}
-          onIncline={() => setDpr((d) => Math.min(1.5, +(d + 0.2).toFixed(2)))}
-          onFallback={() => setDpr(0.85)}
+          onDecline={() => {
+            setDpr((d) => Math.max(quality.minDpr, +(d - 0.14).toFixed(2)));
+            setCloudQuality((q) => Math.max(quality.movingCloudQuality, +(q - 0.1).toFixed(2)));
+          }}
+          onIncline={() => {
+            setDpr((d) => Math.min(quality.maxDpr, +(d + 0.1).toFixed(2)));
+            setCloudQuality((q) => Math.min(quality.idleCloudQuality, +(q + 0.06).toFixed(2)));
+          }}
+          onFallback={() => {
+            setDpr(quality.minDpr);
+            setCloudQuality(quality.movingCloudQuality);
+          }}
         />
         <SceneReadySignal onReady={onReady} />
-        <SceneRig params={params} />
+        <SceneRig params={params} shadowsActive={!performanceMoving} />
         <Sky params={params} />
 
-        {/* Supplemental fill so the island always reads well — a soft sky-tinted
-            bounce + a gentle cool back-fill opposite the sun, lifted at night. */}
+        {/* Soft fill lights keep the island readable. */}
         <hemisphereLight
           intensity={0.36 + night * 0.42}
           color="#f8dfb8"
@@ -270,7 +483,7 @@ export default function Experience({
           color="#ffd29a"
         />
 
-        {/* The sun, sitting where it really is over Sterzing right now. */}
+        {/* Sun marker follows the weather-driven sun direction. */}
         {params.dayFactor > 0.02 && (
           <mesh position={sunFar.toArray()}>
             <sphereGeometry args={[7, 24, 24]} />
@@ -283,17 +496,31 @@ export default function Experience({
           </mesh>
         )}
 
-        {/* Drifting clouds that cycle with the weather (bright → grey → storm). */}
-        <DriftingClouds params={params} />
-        <Dove onFind={onFindDove} />
+        {/* Weather-driven volumetric clouds. */}
+        <VolumetricClouds
+          params={params}
+          quality={effectiveCloudQuality}
+          moving={performanceMoving}
+        />
+        <Dove interactive={!fly} onFind={onFindDove} />
 
         <Float speed={1.1} rotationIntensity={0.1} floatIntensity={0.5}>
           <Island snow={params.snow} scale={ISLAND_SCALE} />
-          <Plateau wind={params.wind} night={night} season={params.season} />
+          <Plateau
+            wind={params.wind}
+            gust={params.gust}
+            windVec={params.windVec}
+            night={night}
+            season={params.season}
+            grassBlades={quality.grassBlades}
+            grassTufts={quality.grassTufts}
+          />
           <group position={[0, TREE_Y, 0]} scale={TREE_BOOST}>
             <Tree
               stars={stars}
               wind={params.wind}
+              gust={params.gust}
+              windVec={params.windVec}
               leafColor={params.leafColor}
               snow={params.snow}
               stargazers={stargazers}
@@ -304,6 +531,7 @@ export default function Experience({
                 highlight={highlight}
                 night={night}
                 stargazers={stargazers}
+                interactive={!fly}
                 onSelect={onSelectHouse}
               />
               <Bridges stars={stars} night={night} stargazers={stargazers} />
@@ -317,6 +545,8 @@ export default function Experience({
           precip={params.precip}
           intensity={params.precipIntensity}
           wind={params.wind}
+          gust={params.gust}
+          windVec={params.windVec}
           storm={params.storm}
         />
         <Preload all />
@@ -329,11 +559,15 @@ export default function Experience({
           makeDefault
           target={orbitTarget}
           enablePan={false}
+          enableDamping
+          dampingFactor={0.055}
           minDistance={12}
           maxDistance={camMax}
           maxPolarAngle={Math.PI / 1.8}
           autoRotate
           autoRotateSpeed={0.35}
+          onStart={markCameraMoving}
+          onEnd={markCameraSettling}
         />
       )}
     </Canvas>

@@ -52,12 +52,16 @@ function leafColor(season: Season, rng: () => number) {
 
 export function FallingLeaves({
   wind,
+  gust = 0,
+  windVec = [1, 0],
   season,
   surface,
   treeY,
   radius = 10.5,
 }: {
   wind: number;
+  gust?: number;
+  windVec?: [number, number];
   season: Season;
   surface?: SurfaceProfile;
   treeY: number;
@@ -134,9 +138,15 @@ export function FallingLeaves({
 
     const a = rng() * Math.PI * 2;
     const r = 2.4 + rng() * 7.6;
+    const wx = windVec[0];
+    const wz = windVec[1];
     const l = leaves[pick];
     l.pos.set(Math.cos(a) * r, treeY + 6.8 + rng() * 6.2, Math.sin(a) * r);
-    l.vel.set((rng() - 0.35) * 0.12 + wind * 0.05, -0.18 - rng() * 0.16, (rng() - 0.5) * 0.12);
+    l.vel.set(
+      (rng() - 0.5) * 0.12 + wx * wind * 0.08,
+      -0.18 - rng() * 0.16,
+      (rng() - 0.5) * 0.12 + wz * wind * 0.08,
+    );
     l.rot.set(rng() * Math.PI, rng() * Math.PI * 2, rng() * Math.PI);
     l.spin.set((rng() - 0.5) * 2.2, (rng() - 0.5) * 2.8, (rng() - 0.5) * 2.4);
     l.scale = 0.62 + rng() * 0.55;
@@ -151,7 +161,11 @@ export function FallingLeaves({
     if (!mesh) return;
     const t = state.clock.elapsedTime;
     const d = Math.min(dt, 0.04);
-    const windy = Math.max(0, wind - 2.05);
+    const windy = Math.max(0, wind + gust * 0.42 - 1.75);
+    const wx = windVec[0];
+    const wz = windVec[1];
+    const sx = -wz;
+    const sz = wx;
     const active = season === "autumn" || windy > 0.15;
     const spawnRate = active ? Math.min(3.2, (season === "autumn" ? 0.7 : 0) + windy * 1.4) : 0;
 
@@ -174,8 +188,11 @@ export function FallingLeaves({
         const flutter = Math.sin(t * 2.1 + l.phase) * 0.12;
         l.vel.y = Math.max(-1.35, l.vel.y - 0.72 * d); // gravity with terminal velocity
         l.vel.multiplyScalar(1 - Math.min(0.08, d * 0.55)); // air drag
-        l.vel.x += (wind * 0.08 + flutter - l.vel.x) * d * 0.34;
-        l.vel.z += Math.cos(t * 1.7 + l.phase) * d * 0.045;
+        const flow = wind + gust * 0.28;
+        const targetX = wx * flow * 0.18 + sx * flutter * 0.42;
+        const targetZ = wz * flow * 0.18 + sz * flutter * 0.42;
+        l.vel.x += (targetX - l.vel.x) * d * 0.42;
+        l.vel.z += (targetZ - l.vel.z) * d * 0.42;
         l.pos.addScaledVector(l.vel, d);
         l.pos.y += Math.sin(t * 3.0 + l.phase) * d * 0.045;
         l.rot.x += l.spin.x * d;

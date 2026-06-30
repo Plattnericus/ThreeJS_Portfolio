@@ -2,6 +2,7 @@
   "name": "threejs-portfolio",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -16,7 +17,7 @@
     "next": "16.2.9",
     "react": "19.2.7",
     "react-dom": "19.2.7",
-    "three": "0.185.0"
+    "three": "0.182.0"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.4.0",
@@ -25,9 +26,15 @@
     "@types/node": "^24.0.0",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
-    "@types/three": "0.184.1",
-    "postcss": "8.5.1",
+    "@types/three": "0.182.0",
+    "postcss": "8.5.16",
     "tailwindcss": "4.3.1",
     "typescript": "5.9.2"
+  },
+  "overrides": {
+    "postcss": "8.5.16"
+  },
+  "allowScripts": {
+    "sharp@0.34.5": true
   }
 }

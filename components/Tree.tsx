@@ -14,10 +14,7 @@ import { deckRadius, type Tier } from "@/lib/rarity";
 
 const LEAVES = "/models/leaves.glb";
 
-// Normalised, instanceable leaf clump built from the leaves.glb model: merge its
-// meshes, bake a per-material brightness into vertex colours (subtle two-tone),
-// centre at origin and scale to ~1 unit. Hue then comes from the seasonal leaf
-// material (color * vertexColor), so it still tints with the seasons.
+// Builds a normalized, tintable leaf clump from the GLB asset.
 function useLeafClumpGeometry(): THREE.BufferGeometry {
   const { scene } = useGLTF(LEAVES);
   return useMemo(() => {
@@ -27,12 +24,12 @@ function useLeafClumpGeometry(): THREE.BufferGeometry {
     clone.traverse((o) => {
       if (!(o instanceof THREE.Mesh)) return;
       const matName = (o.material as THREE.Material)?.name ?? "";
-      if (matName === "material") return; // drop the white stem bits — keep leaves
+      if (matName === "material") return;
       const base = new THREE.BufferGeometry();
       base.setAttribute("position", (o.geometry.getAttribute("position") as THREE.BufferAttribute).clone());
       if (o.geometry.index) base.setIndex(o.geometry.index.clone());
       base.applyMatrix4(o.matrixWorld);
-      // non-indexed so all clumps merge cleanly regardless of source indexing
+      // Use non-indexed geometry for stable merging.
       const g = base.index ? base.toNonIndexed() : base;
       const name = (o.material as THREE.Material)?.name ?? "";
       const v = name.includes("F07") ? 0.88 : name === "material" ? 0.96 : 1.0;
@@ -57,8 +54,7 @@ function useLeafClumpGeometry(): THREE.BufferGeometry {
 
 type Clump = { pos: THREE.Vector3; rot: [number, number, number]; scl: number };
 
-// One draw call per branch: all its leaf clumps as an instanced mesh (a child of
-// the branch group, so it grows/sways with the branch).
+// Instanced leaf clumps for one canopy batch.
 function LeafClumps({
   clumps,
   geometry,
@@ -71,9 +67,7 @@ function LeafClumps({
   grown: boolean;
 }) {
   const ref = useRef<THREE.InstancedMesh>(null);
-  // Set instance matrices AND the correct visibility/scale. r3f recreates the
-  // instancedMesh whenever `clumps` (count) changes, so we must re-apply state
-  // here — otherwise a star arriving would leave the new mesh hidden at scale 0.
+  // Re-apply matrices after r3f recreates the instanced mesh.
   useLayoutEffect(() => {
     const mesh = ref.current;
     if (!mesh) return;
@@ -93,7 +87,7 @@ function LeafClumps({
     mesh.scale.setScalar(grown ? 1 : 0.001);
   }, [clumps, grown]);
 
-  // GSAP "unfurl": the canopy bursts open with a back-ease once the tree grows.
+  // Animate canopy growth.
   useEffect(() => {
     const mesh = ref.current;
     if (!mesh) return;
@@ -135,9 +129,7 @@ const BARK_LIGHT = "#a87854";
 const BLOSSOM = "#e34f92";
 const BLOSSOM_LIGHT = "#ff9fc4";
 
-// Procedural bark texture (colour + bump + roughness) baked once into a canvas —
-// a real "fixed texture" with deep vertical plates, cracks and grain, so light
-// catches actual relief. No external file; generated client-side, cached.
+// Procedural bark texture generated once and cached.
 let _barkTex: { map: THREE.Texture; bump: THREE.Texture; rough: THREE.Texture } | null = null;
 function getBarkTextures() {
   if (_barkTex) return _barkTex;
@@ -149,9 +141,7 @@ function getBarkTextures() {
     const t = clamp01((x - e0) / (e1 - e0));
     return t * t * (3 - 2 * t);
   };
-  // 3D value noise sampled on a CYLINDER (angle around the trunk) so the pattern
-  // wraps seamlessly with no vertical seam — and reads as mottled/blotchy bark
-  // rather than regular vertical stripes.
+  // Cylindrical noise keeps bark seamless around the trunk.
   const hash3 = (i: number, j: number, k: number) => {
     const x = Math.sin(i * 127.1 + j * 311.7 + k * 74.7) * 43758.5453;
     return x - Math.floor(x);
@@ -190,7 +180,7 @@ function getBarkTextures() {
       z *= 2.03;
       a *= 0.5;
     }
-    return s / 0.875; // normalise ~0..1
+    return s / 0.875;
   };
   const mk = () => {
     const cv = document.createElement("canvas");
@@ -208,30 +198,30 @@ function getBarkTextures() {
   const rI = rctx.createImageData(S, S);
   for (let y = 0; y < S; y++) {
     for (let x = 0; x < S; x++) {
-      const fx = x / S; // up the trunk (geometry UV.x)
-      const fy = y / S; // AROUND the trunk → seamless via cylinder angle
+      const fx = x / S;
+      const fy = y / S;
       const ang = fy * Math.PI * 2;
       const R = 1.7;
       const cx = Math.cos(ang) * R;
       const cz = Math.sin(ang) * R;
       const up = fx * 6.0;
-      // domain warp (2 reused samples) → organic, non-aligned bark features
+      // Domain warp creates organic bark variation.
       const nA = fbm3(cx * 0.9 + 1.3, up * 0.9, cz * 0.9) - 0.5;
       const nB = fbm3(cx * 0.9 + 7.7, up * 0.9 + 5.1, cz * 0.9 + 4.4) - 0.5;
       const cxw = cx + nA * 0.7;
       const czw = cz + nB * 0.7;
       const upw = up + (nA + nB) * 0.6;
-      const blotch = fbm3(cxw * 0.85, upw * 0.55, czw * 0.85); // big mottled patches
-      const plate = fbm3(cxw * 1.5, upw * 1.0, czw * 1.5); // irregular bark plates
+      const blotch = fbm3(cxw * 0.85, upw * 0.55, czw * 0.85);
+      const plate = fbm3(cxw * 1.5, upw * 1.0, czw * 1.5);
       const crackN = fbm3(cxw * 2.3, upw * 2.7, czw * 2.3);
       const ridged = 1 - Math.abs(crackN * 2 - 1);
-      const crack = Math.pow(1 - ridged, 2.4); // narrow, deep, meandering fissures
-      const grain = fbm3(cx * 7.5, up * 13.0, cz * 7.5); // fine grain
-      const lich = smooth(0.6, 0.82, blotch); // lichen/weather patches (reuse blotch)
-      // bump: plates raised, cracks recessed, grain detail
+      const crack = Math.pow(1 - ridged, 2.4);
+      const grain = fbm3(cx * 7.5, up * 13.0, cz * 7.5);
+      const lich = smooth(0.6, 0.82, blotch);
+      // Height map for bark relief.
       let h = 0.46 + (plate - 0.5) * 0.5 + (blotch - 0.5) * 0.26 - crack * 0.85 + (grain - 0.5) * 0.16;
       h = clamp01(h);
-      // colour: mottle between bark tones, greyish-green lichen, darkened cracks
+      // Color variation for bark, lichen, and cracks.
       const tone = clamp01(blotch * 0.55 + plate * 0.45);
       let r = lerp(86, 170, tone);
       let g = lerp(56, 116, tone);
@@ -265,7 +255,7 @@ function getBarkTextures() {
   map.colorSpace = THREE.SRGBColorSpace;
   for (const t of [map, bump, rough]) {
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.repeat.set(3, 1); // 3 tiles up the trunk, one seamless wrap around
+    t.repeat.set(3, 1);
     t.anisotropy = 8;
   }
   _barkTex = { map, bump, rough };
@@ -275,20 +265,18 @@ function getBarkTextures() {
 function makeBarkMaterial(_color = BARK) {
   const { map, bump, rough } = getBarkTextures();
   return new THREE.MeshStandardMaterial({
-    color: 0xffffff, // the texture carries the colour
+    color: 0xffffff,
     map,
     bumpMap: bump,
     bumpScale: 1.7,
     roughnessMap: rough,
     roughness: 1,
     metalness: 0,
-    side: THREE.DoubleSide, // never let a trunk side cull/show-through
+    side: THREE.DoubleSide,
   });
 }
 
-// Cut-branch cap: concentric annual rings on the sawn face. Uses the disc's own
-// local XY radius, so one shared material works for every stub. Slightly wobbled
-// so the rings aren't perfect circles, with a darker heartwood centre.
+// Cut-branch cap material with subtle annual rings.
 function makeRingCapMaterial() {
   const mat = new THREE.MeshStandardMaterial({
     color: "#caa46a",
@@ -314,19 +302,21 @@ function makeRingCapMaterial() {
         vec3 lightw = vec3(0.80, 0.64, 0.40);
         vec3 darkw = vec3(0.45, 0.31, 0.16);
         vec3 woodc = mix(darkw, lightw, rings);
-        woodc *= mix(0.78, 1.0, smoothstep(0.0, 0.04, rad)); // darker heartwood core
+        woodc *= mix(0.78, 1.0, smoothstep(0.0, 0.04, rad));
         diffuseColor.rgb = woodc;`,
       );
   };
   return mat;
 }
 
-// Leaf material with a per-instance wind sway baked into the vertex shader, so
-// the whole instanced canopy ripples in one draw call. Seasonal tint still comes
-// from `.color` (× vertexColor); `uWind` is the live wind value.
+// Leaf material with batched wind sway.
 function makeLeafMaterial(
   color: THREE.ColorRepresentation,
-  uniforms: { uTime: { value: number }; uWind: { value: number } },
+  uniforms: {
+    uTime: { value: number };
+    uWind: { value: number };
+    uWindDir: { value: THREE.Vector2 };
+  },
 ) {
   const mat = new THREE.MeshStandardMaterial({
     color,
@@ -337,8 +327,9 @@ function makeLeafMaterial(
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = uniforms.uTime;
     shader.uniforms.uWind = uniforms.uWind;
+    shader.uniforms.uWindDir = uniforms.uWindDir;
     shader.vertexShader =
-      "uniform float uTime;\nuniform float uWind;\n" +
+      "uniform float uTime;\nuniform float uWind;\nuniform vec2 uWindDir;\n" +
       shader.vertexShader.replace(
         "#include <begin_vertex>",
         `#include <begin_vertex>
@@ -348,10 +339,15 @@ function makeLeafMaterial(
           float ph = position.x * 0.6;
         #endif
         float hf = 0.35 + max(transformed.y, 0.0) * 0.6;
-        // constant downwind lean (scales with wind speed) + gusty flutter
-        transformed.x += uWind * 0.035 * hf;
-        transformed.x += (sin(uTime * 1.25 + ph) * 0.04 + sin(uTime * 2.6 + ph * 1.7) * 0.018) * uWind * hf;
-        transformed.z += (cos(uTime * 1.1 + ph) * 0.035) * uWind * hf;
+        vec2 dir = normalize(uWindDir);
+        vec2 side = vec2(-dir.y, dir.x);
+        float stream = ph - uTime * (0.55 + uWind * 0.08);
+        float gust = 0.72 + 0.2 * sin(uTime * 0.46 + ph) + 0.08 * sin(uTime * 1.8 + ph * 0.7);
+        // Downwind lean plus subtle turbulent flutter.
+        float downwind = (0.035 + sin(stream * 1.35) * 0.018) * uWind * hf * gust;
+        float lateral = (sin(uTime * 2.6 + ph * 1.7) * 0.018 + cos(uTime * 1.35 + ph) * 0.012) * uWind * hf;
+        transformed.x += dir.x * downwind + side.x * lateral;
+        transformed.z += dir.y * downwind + side.y * lateral;
         transformed.y += sin(uTime * 1.6 + ph * 1.3) * 0.014 * uWind * hf;
         `,
       );
@@ -376,10 +372,7 @@ function makeBlossomGeometry() {
   return geo;
 }
 
-// A tiny CLUSTER of leaves (the instanced unit hung along the twigs). A few flat
-// leaves fanned + drooping around a base, merged into one small geometry (~6 leaf
-// cards). Instancing thousands of these = a dense, real-tree canopy for cheap.
-// vertexColors carry a subtle per-leaf two-tone (× the seasonal leaf colour).
+// Leaf sprig geometry used by each canopy instance.
 function makeLeafSprigGeometry(): THREE.BufferGeometry {
   const shape = new THREE.Shape();
   shape.moveTo(0, -0.05);
@@ -390,11 +383,11 @@ function makeLeafSprigGeometry(): THREE.BufferGeometry {
   for (let i = 0; i < N; i++) {
     const g = new THREE.ShapeGeometry(shape, 5);
     g.scale(1.28, 1.28, 1.28);
-    g.rotateX(-0.45 - (i % 5) * 0.15); // tilt + droop
-    g.rotateY(i * 2.39996 + 0.5); // golden-angle fan
+    g.rotateX(-0.45 - (i % 5) * 0.15);
+    g.rotateY(i * 2.39996 + 0.5);
     g.translate((i % 4 - 1.5) * 0.045, 0.26 + (i % 7) * 0.018, ((i * 7) % 7 - 3) * 0.032);
     const cnt = g.getAttribute("position").count;
-    const shade = 0.72 + (i % 7) * 0.045; // subtle multi-tone
+    const shade = 0.72 + (i % 7) * 0.045;
     g.setAttribute(
       "color",
       new THREE.BufferAttribute(new Float32Array(cnt * 3).fill(shade), 3),
@@ -531,6 +524,8 @@ function BranchCluster({
 export function Tree({
   stars,
   wind = 1,
+  gust = 0,
+  windVec = [1, 0],
   leafColor = "#5aa238",
   snow = 0,
   stargazers = null,
@@ -539,6 +534,8 @@ export function Tree({
 }: {
   stars: number;
   wind?: number;
+  gust?: number;
+  windVec?: [number, number];
   leafColor?: string;
   snow?: number;
   stargazers?: { tier?: Tier }[] | null;
@@ -549,9 +546,12 @@ export function Tree({
   const nodes = useMemo(() => bonsaiNodes(MAX_HOUSES), []);
   const active = Math.min(MAX_HOUSES, Math.max(0, Math.floor(stars)));
   const sprigGeo = useMemo(makeLeafSprigGeometry, []);
-  // Shared wind uniforms — updated each frame; the leaf shader reads them so the
-  // whole canopy ripples (procedural "physics", 1 draw call).
-  const windUniforms = useRef({ uTime: { value: 0 }, uWind: { value: 1 } });
+  // Shared uniforms for batched canopy motion.
+  const windUniforms = useRef({
+    uTime: { value: 0 },
+    uWind: { value: 1 },
+    uWindDir: { value: new THREE.Vector2(windVec[0], windVec[1]) },
+  });
 
   const materials = useMemo(
     () => ({
@@ -584,12 +584,9 @@ export function Tree({
       .lerp(new THREE.Color("#ffffff"), Math.min(1, snow * 0.4));
   }, [materials, leafColor, snow]);
 
-  // The trunk is now a TALL spine sampled from the ground to the top active
-  // platform (+ crown margin). It thickens with height but stays thinner than the
-  // helix radius (5.2) so it never pokes through a platform. Regenerates as the
-  // tower grows.
-  const trunkH = trunkHeight(stars); // trunk tip ends inside the crown
-  const trunkR = trunkBaseRadius(stars); // thin, clean trunk
+  // Trunk follows the procedural spine and grows with the tower.
+  const trunkH = trunkHeight(stars);
+  const trunkR = trunkBaseRadius(stars);
   const trunkPieces = useMemo(() => {
     const H = trunkH;
     const baseR = trunkR;
@@ -626,9 +623,7 @@ export function Tree({
     });
   }, [trunkH, trunkR]);
 
-  // A few old, sawn-off branch stubs jutting from the trunk — each a short tapered
-  // limb capped with an annual-ring disc (the cut face). Deterministic detail that
-  // breaks up the "perfect pipe" silhouette.
+  // Small branch stubs break up the trunk silhouette.
   const trunkStubPieces = useMemo(() => {
     const H = trunkH;
     const baseR = trunkR;
@@ -690,8 +685,7 @@ export function Tree({
   const blossomGeometry = useMemo(makeBlossomGeometry, []);
   const planter = useMemo(makePlanterGeometry, []);
 
-  // Crown extent (mirrors the canopy fill below) — used to size a cheap shadow
-  // proxy so the dense canopy itself can stay out of the shadow passes.
+  // Bounds for the cheap canopy shadow proxy.
   const crownBounds = useMemo(() => {
     let maxReach = 3.6;
     let minY = Infinity;
@@ -713,27 +707,18 @@ export function Tree({
     };
   }, [active, nodes, stargazers]);
 
-  // The whole crown as one collision-aware cloud of leaf clumps. Foliage sits on
-  // EVERY branch node (so the crown is full from the first star — its small size
-  // comes from the tree's scale, not from missing leaves), but is carved away
-  // wherever an ACTIVE house deck or a bridge between two decks would be, so
-  // leaves never poke through houses/walkways.
+  // Collision-aware canopy generated as merged branches and instanced leaves.
   const crownStructure = useMemo(() => {
     const decks = Array.from({ length: active }, (_, i) => {
       const r = deckRadius(i, stargazers);
-      // tier-aware clearance height: deck + building + roof (r/1.5 == tier size).
       return { c: nodes[i].tip, r, top: 0.35 + (r / 1.5) * 1.9 };
     });
-    // a clump is "blocked" if it sits in a deck disc, or over a bridge segment
-    // between two nearby active decks, within the walkway height band.
+    // Keep foliage clear of decks, houses, and bridge corridors.
     const blocked = (p: THREE.Vector3, scl: number) => {
       const pad = 0.35 + scl * 0.22;
       for (const d of decks) {
         const dx = p.x - d.c.x;
         const dz = p.z - d.c.z;
-        // clear a full-height column around each house — from just under the deck
-        // up past the roof (tier-aware) — padded by the clump's own radius so big
-        // clumps never poke in from the side or hang down onto the roof.
         if (
           dx * dx + dz * dz < (d.r + pad) * (d.r + pad) &&
           p.y > d.c.y - 0.5 - scl * 0.3 &&
@@ -746,7 +731,7 @@ export function Tree({
           const a = decks[i].c;
           const b = decks[j].c;
           const gap = Math.hypot(b.x - a.x, b.z - a.z) - decks[i].r - decks[j].r;
-          if (gap < 0.4 || gap > 6) continue; // only real bridge spans
+          if (gap < 0.4 || gap > 6) continue;
           const abx = b.x - a.x;
           const abz = b.z - a.z;
           const t = THREE.MathUtils.clamp(
@@ -756,8 +741,8 @@ export function Tree({
           );
           const cx = a.x + abx * t;
           const cz = a.z + abz * t;
-          const cy = a.y + (b.y - a.y) * t + 0.5; // walkway sits above the anchors
-          const rr = 1.0 + scl * 0.45; // corridor half-width incl. the clump radius
+          const cy = a.y + (b.y - a.y) * t + 0.5;
+          const rr = 1.0 + scl * 0.45;
           if ((p.x - cx) ** 2 + (p.z - cz) ** 2 < rr * rr && Math.abs(p.y - cy) < 1.2 + scl * 0.3)
             return true;
         }
@@ -765,9 +750,7 @@ export function Tree({
       return false;
     };
 
-    // The crown is a rounded, organic mass that CAPS the trunk tip and wraps the
-    // platforms: foliage from just below the lowest platform up to an apex ABOVE
-    // the trunk (so the trunk never pokes out bare), fullest toward the top.
+    // Crown bounds wrap the platforms and cover the trunk tip.
     let lowPlatY = Infinity;
     let maxReach = 3.2;
     for (let i = 0; i < active; i++) {
@@ -776,16 +759,14 @@ export function Tree({
       lowPlatY = Math.min(lowPlatY, nodes[i].base.y);
     }
     if (!isFinite(lowPlatY)) lowPlatY = 2;
-    const trunkTopY = trunkHeight(stars); // the trunk tip the crown must cap
-    const apexY = treeHeight(stars); // crown apex, ABOVE the tip
-    const cBot = Math.max(1.0, lowPlatY - 0.8); // foliage starts just below lowest deck
-    const cRX = maxReach + 1.0; // horizontal foliage radius (wraps the platforms)
+    const trunkTopY = trunkHeight(stars);
+    const apexY = treeHeight(stars);
+    const cBot = Math.max(1.0, lowPlatY - 0.8);
+    const cRX = maxReach + 1.0;
     const span = Math.max(2, apexY - cBot);
     const GA = Math.PI * (3 - Math.sqrt(5));
 
-    // === Recursive crown: branches that FORK again and again, like a real tree.
-    // Primaries spray off the upper trunk; every segment splits 2–3 ways down to
-    // fine twigs, with dense leaf tufts on the outer twigs. Carved off the houses.
+    // Recursive branch system for the canopy.
     const branchGeos: THREE.BufferGeometry[] = [];
     const sprigs: Clump[] = [];
     let seed = 7;
@@ -795,8 +776,7 @@ export function Tree({
       return x - Math.floor(x);
     };
     const UP = new THREE.Vector3(0, 1, 0);
-    // a child direction: the parent dir rotated by `spread` about a random axis
-    // perpendicular to it, with a gentle upward reach toward the light.
+    // Rotate child branches away from the parent direction.
     const childDir = (dir: THREE.Vector3, spread: number) => {
       const ref = Math.abs(dir.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : UP;
       const p1 = new THREE.Vector3().crossVectors(dir, ref).normalize();
@@ -809,8 +789,8 @@ export function Tree({
       return dir.clone().applyAxisAngle(axis, spread).addScaledVector(UP, 0.28).normalize();
     };
     const addLeaf = (p: THREE.Vector3, anchor?: THREE.Vector3, twigRadius = 0.018) => {
-      const scl = 0.78 + rnd() * 0.54; // full visible leaf tufts
-      if (blocked(p, scl)) return; // never on a house/bridge
+      const scl = 0.78 + rnd() * 0.54;
+      if (blocked(p, scl)) return;
       if (anchor) {
         const d = p.distanceTo(anchor);
         if (d > 0.05) {
@@ -856,7 +836,7 @@ export function Tree({
       }
     };
 
-    let budget = THREE.MathUtils.clamp(Math.round(span * 190), 7600, 18000); // segment cap (perf)
+    let budget = THREE.MathUtils.clamp(Math.round(span * 100), 3200, 7600);
     const grow = (
       pos: THREE.Vector3,
       dir: THREE.Vector3,
@@ -866,71 +846,58 @@ export function Tree({
     ) => {
       if (budget-- <= 0) return;
       const end = pos.clone().addScaledVector(dir, len);
-      end.y -= Math.max(0, 1 - rad * 6) * len * 0.14; // thin branches droop a little
-      if (blocked(end, rad * 3 + 0.25)) return; // carve around houses/bridges
+      end.y -= Math.max(0, 1 - rad * 6) * len * 0.14;
+      if (blocked(end, rad * 3 + 0.25)) return;
       const mid = pos.clone().addScaledVector(dir, len * 0.5);
       branchGeos.push(makeTaperedTubeGeometry([pos, mid, end], rad, rad * 0.66, 3, 4, seed * 0.7));
       if (depth <= 0 || len < 0.34) {
         addLeafBurst(end, dir, 10, 0.48, rad * 0.16);
-        return; // terminal twig
+        return;
       }
-      // dense small-leaf tufts, thickening toward the fine outer twigs
+      // Add denser foliage on thinner outer twigs.
       if (depth <= 3) addLeafBurst(end, dir, 1, 0.18, rad * 0.22);
       if (depth <= 2) addLeafBurst(end, dir, 2, 0.26, rad * 0.2);
       if (depth <= 1) addLeafBurst(end, dir, 6, 0.4, rad * 0.18);
       const n = depth >= 3 ? (rnd() < 0.5 ? 3 : 2) : 2;
       for (let c = 0; c < n; c++) {
-        // tighter spread → a tidier, less sprawly crown
         grow(end, childDir(dir, 0.3 + rnd() * 0.4), len * (0.62 + rnd() * 0.16), rad * 0.68, depth - 1);
       }
     };
 
-    // (a) MAIN CROWN — a rounded, organic dome from just below the lowest platform
-    // up to the apex, CAPPING the trunk tip. Boughs grow from the spine toward
-    // shell points (golden-angle, outward-biased, jittered → rounded but not a
-    // perfect ball); short segments fork into leafy twigs.
-    const NC = THREE.MathUtils.clamp(Math.round(span * 9.2 + 72), 110, 620);
+    // Main crown shell.
+    const NC = THREE.MathUtils.clamp(Math.round(span * 5.6 + 44), 80, 300);
     for (let i = 0; i < NC; i++) {
-      const v = i / Math.max(1, NC - 1); // 0 (base) .. 1 (apex)
+      const v = i / Math.max(1, NC - 1);
       const ty = cBot + v * (apexY - cBot) + (rnd() - 0.5) * 0.9;
-      // Envelope WIDENS with height to wrap the platforms that fan outward as the
-      // tower climbs (the top platforms are the outermost — they must not stick out
-      // bare), and only rounds off in the top ~15% so the apex still caps cleanly.
       const cap = Math.pow(Math.max(0, (v - 0.85) / 0.15), 2);
       const domeR = cRX * (0.5 + 0.5 * Math.min(1, v * 1.2)) * (1 - 0.5 * cap);
       const a = i * GA + rnd() * 0.5;
-      const rr = 0.5 + 0.5 * Math.sqrt(rnd()); // outward bias → rounded shell
+      const rr = 0.5 + 0.5 * Math.sqrt(rnd());
       const target = new THREE.Vector3(Math.cos(a) * domeR * rr, ty, Math.sin(a) * domeR * rr);
-      if (blocked(target, 0.7)) continue; // never into a house/bridge
+      if (blocked(target, 0.7)) continue;
       const oy = THREE.MathUtils.clamp(ty - 1.0 - rnd() * 1.0, cBot - 0.5, trunkTopY);
       const sp = spineAt(oy);
       const dir = target.clone().sub(sp);
       if (dir.lengthSq() < 0.01) continue;
       dir.normalize();
-      grow(sp, dir, 1.8 + rnd() * 0.65, 0.09, 5); // longer, clean boughs before the fine twigs
+      grow(sp, dir, 1.8 + rnd() * 0.65, 0.09, 5);
     }
-    // (b) per-platform NEST — a dense ring of boughs hugging each platform so every
-    // treehouse nestles in leaves (carved off the deck itself). The leaves wrap the
-    // deck rim and rise as a leafy collar behind/around the house, so no platform —
-    // not even the topmost, outermost ones — is left sitting bare.
+    // Leaf collars around active platforms.
     for (let i = 0; i < active; i++) {
       const base = nodes[i].base;
       const tip = nodes[i].tip;
       const dr = deckRadius(i, stargazers);
-      const RING = 11;
+      const RING = 8;
       for (let k = 0; k < RING; k++) {
         const a = (k / RING) * Math.PI * 2 + i * 1.3;
-        // anchor just outside the deck rim, all around it, and grow outward + up so
-        // foliage forms a bowl the platform sits in (never INTO the house column).
         const o = tip
           .clone()
           .add(new THREE.Vector3(Math.cos(a) * dr * 1.04, -0.25 + rnd() * 0.3, Math.sin(a) * dr * 1.04));
         const out = new THREE.Vector3(Math.cos(a) * 0.85, 0.45 + rnd() * 0.6, Math.sin(a) * 0.85).normalize();
-        grow(o, out, 1.15 + rnd() * 0.65, 0.06, 3); // short, leafy collar twigs
+        grow(o, out, 1.15 + rnd() * 0.65, 0.06, 3);
       }
-      // a few boughs just OUTSIDE the rim reaching UP → a leafy backdrop rising
-      // above the roofline (anchored clear of the deck column so they aren't carved).
-      for (let k = 0; k < 4; k++) {
+      // Add a small leafy backdrop behind each deck.
+      for (let k = 0; k < 3; k++) {
         const a = i * 1.3 + k * 1.7;
         const o = tip
           .clone()
@@ -938,33 +905,104 @@ export function Tree({
         grow(o, new THREE.Vector3(Math.cos(a) * 0.35, 1, Math.sin(a) * 0.35).normalize(), 1.65 + rnd() * 0.65, 0.055, 3);
       }
     }
-    // (c) TIP CAP — a dense leafy knot wrapping the top of the trunk on all sides
-    // so the tip is buried in leaves and never pokes out bare.
-    for (let k = 0; k < 22; k++) {
+    // Dense tip canopy around the upper trunk.
+    for (let k = 0; k < 14; k++) {
       const a = k * GA + 0.3;
-      const o = spineAt(trunkTopY - rnd() * 1.6); // from just below the tip up to it
+      const o = spineAt(trunkTopY - rnd() * 1.6);
       const out = new THREE.Vector3(Math.cos(a), 0.25 + rnd() * 0.7, Math.sin(a)).normalize();
       grow(o, out, 0.9 + rnd() * 0.75, 0.05, 3);
     }
     const tipBase = spineAt(trunkTopY);
-    for (let k = 0; k < 26; k++) {
+    for (let k = 0; k < 16; k++) {
       const p = tipBase
         .clone()
         .add(new THREE.Vector3((rnd() - 0.5) * 1.3, rnd() * 1.5 - 0.2, (rnd() - 0.5) * 1.3));
       addLeaf(p, tipBase, 0.024);
     }
 
-    // (d) APEX TWIG FILL — the top crown stays full, but every leaf is generated
-    // by a short branch recursion from the spine. No free-floating filler leaves.
+    // Inner rosette that covers the trunk from top-down views.
+    for (let layer = 0; layer < 5; layer++) {
+      const lt = layer / 4;
+      const center = spineAt(trunkTopY - 0.7 + lt * 2.2);
+      const ring = 14 + layer * 3;
+      for (let k = 0; k < ring; k++) {
+        const a = k * GA + layer * 0.58;
+        const radius = THREE.MathUtils.lerp(0.45, 2.55, lt) * (0.75 + rnd() * 0.5);
+        const p = center.clone().add(
+          new THREE.Vector3(
+            Math.cos(a) * radius,
+            (rnd() - 0.25) * 0.45,
+            Math.sin(a) * radius,
+          ),
+        );
+        addLeaf(p, center, 0.026);
+        if (k % 2 === 0) {
+          const out = p.clone().sub(center);
+          if (out.lengthSq() > 0.01) addLeafBurst(p, out.normalize(), 3, 0.3, 0.016);
+        }
+      }
+    }
+
+    // Central canopy plug for the top-down camera.
+    const plugLayers = 6;
+    for (let layer = 0; layer < plugLayers; layer++) {
+      const lt = layer / (plugLayers - 1);
+      const y = THREE.MathUtils.lerp(cBot + span * 0.48, apexY + 0.55, lt);
+      const center = spineAt(y);
+      const ring = 12 + Math.round(lt * 14);
+      const maxR = THREE.MathUtils.lerp(0.8, 3.0, Math.sin(lt * Math.PI));
+      for (let k = 0; k < ring; k++) {
+        const a = k * GA + layer * 0.41 + rnd() * 0.12;
+        const inner = k % 5 === 0 ? 0.05 + rnd() * 0.18 : 0.22 + rnd() * maxR;
+        const p = center.clone().add(
+          new THREE.Vector3(
+            Math.cos(a) * inner,
+            (rnd() - 0.35) * 0.5,
+            Math.sin(a) * inner,
+          ),
+        );
+        addLeaf(p, center, 0.022);
+        if (k % 3 === 0) {
+          const out = p.clone().sub(center);
+          if (out.lengthSq() > 0.01) addLeafBurst(p, out.normalize(), 2, 0.24, 0.014);
+        }
+      }
+    }
+
+    // Layered radial branches around the upper trunk.
+    const sleeveLayers = 5;
+    for (let layer = 0; layer < sleeveLayers; layer++) {
+      const ly = THREE.MathUtils.lerp(trunkTopY - 2.3, trunkTopY + 1.7, layer / (sleeveLayers - 1));
+      const center = spineAt(ly);
+      const ring = layer < 2 ? 12 : 16;
+      const layerT = layer / (sleeveLayers - 1);
+      const baseReach = THREE.MathUtils.lerp(2.2, 4.3, Math.sin(layerT * Math.PI));
+      for (let k = 0; k < ring; k++) {
+        const a = k * GA + layer * 0.73 + rnd() * 0.18;
+        const reach = baseReach * (0.72 + rnd() * 0.45);
+        const out = new THREE.Vector3(
+          Math.cos(a) * reach,
+          -0.08 + rnd() * 0.55 + layerT * 0.25,
+          Math.sin(a) * reach,
+        );
+        const target = center.clone().add(out);
+        if (blocked(target, 0.9)) continue;
+        const dir = target.clone().sub(center);
+        if (dir.lengthSq() < 0.01) continue;
+        grow(center, dir.normalize(), 1.05 + rnd() * 0.45, 0.05, 3);
+      }
+    }
+
+    // Apex fill uses supported twig growth, not loose leaves.
     const topStart = cBot + span * 0.55;
-    const NF = THREE.MathUtils.clamp(Math.round(span * 18), 120, 360);
+    const NF = THREE.MathUtils.clamp(Math.round(span * 10), 70, 180);
     for (let i = 0; i < NF; i++) {
       const ty = topStart + (i / Math.max(1, NF - 1)) * (apexY + 0.8 - topStart) + (rnd() - 0.5) * 0.8;
       const vv = THREE.MathUtils.clamp((ty - cBot) / span, 0, 1);
       const cap = Math.pow(Math.max(0, (vv - 0.85) / 0.15), 2);
       const domeR = cRX * (0.5 + 0.5 * Math.min(1, vv * 1.2)) * (1 - 0.5 * cap);
       const a = i * GA + rnd() * 0.6;
-      const rr = 0.35 + 0.65 * Math.sqrt(rnd()); // fuller shell, still supported by twigs
+      const rr = 0.35 + 0.65 * Math.sqrt(rnd());
       const target = new THREE.Vector3(Math.cos(a) * domeR * rr, ty, Math.sin(a) * domeR * rr);
       if (blocked(target, 0.7)) continue;
       const oy = THREE.MathUtils.clamp(ty - 0.8 - rnd() * 1.5, cBot, trunkTopY);
@@ -999,27 +1037,34 @@ export function Tree({
 
   useFrame((state) => {
     const t = state.clock.elapsedTime;
-    // gusty wind: a slow-varying multiplier so it surges like real wind
-    const gust = 0.7 + 0.34 * Math.sin(t * 0.45) + 0.2 * Math.sin(t * 1.7 + 1.1);
-    const w = wind * gust;
-    // drive the canopy leaf shader with the gusty wind
+    // Slow gust modulation for natural canopy motion.
+    const gustWave =
+      0.72 +
+      0.18 * Math.sin(t * 0.45) +
+      0.08 * Math.sin(t * 1.7 + 1.1) +
+      gust * 0.18 * Math.sin(t * 0.9 + 0.4);
+    const w = wind * gustWave;
+    // Drive the batched leaf shader.
     windUniforms.current.uTime.value = t;
     windUniforms.current.uWind.value = w;
+    windUniforms.current.uWindDir.value.set(windVec[0], windVec[1]).normalize();
     if (!swayRef.current) return;
-    // the whole crown leans DOWNWIND (more in stronger wind) and sways/whips
-    const lean = Math.min(0.13, 0.018 + wind * 0.034) * gust;
-    swayRef.current.rotation.z = -lean + Math.sin(t * (0.62 + wind * 0.12)) * 0.014 * wind;
-    swayRef.current.rotation.x = Math.cos(t * 0.46 + 1.3) * 0.008 * wind;
+    // Lean the whole crown downwind.
+    const lean = Math.min(0.12, 0.012 + wind * 0.028 + gust * 0.012) * gustWave;
+    const side = Math.sin(t * (0.62 + wind * 0.12)) * 0.012 * wind;
+    swayRef.current.rotation.z = -windVec[0] * lean + windVec[1] * side;
+    swayRef.current.rotation.x = windVec[1] * lean + windVec[0] * side * 0.55;
     branchRefs.current.forEach((group, i) => {
       if (!group || !group.visible) return;
-      group.rotation.z = Math.sin(t * (0.95 + wind * 0.16) + i * 0.7) * 0.026 * w;
-      group.rotation.x = Math.cos(t * 0.72 + i) * 0.014 * w;
+      const phase = i * 0.7;
+      const bend = Math.min(0.06, 0.01 + w * 0.016);
+      const flutter = Math.sin(t * (0.95 + wind * 0.16) + phase) * 0.014 * w;
+      group.rotation.z = -windVec[0] * bend + windVec[1] * flutter;
+      group.rotation.x = windVec[1] * bend + Math.cos(t * 0.72 + i) * 0.009 * w;
     });
   });
 
-  // One-time intro pop; the tower's "growth" now reads as the trunk + crown
-  // extending taller and platforms revealing — not a uniform scale (which would
-  // change the fixed ~5m platform spacing).
+  // Small intro settle without changing platform spacing.
   const { scale } = useSpring({
     from: { scale: 0.92 },
     to: { scale: 1 },
@@ -1077,13 +1122,12 @@ export function Tree({
           </group>
         ))}
 
-        {/* Recursive branch skeleton: forking boughs → twigs (one merged mesh). */}
+        {/* Merged procedural branch skeleton. */}
         {active > 0 && crownStructure.branchGeo && (
-          <mesh geometry={crownStructure.branchGeo} material={materials.bark} castShadow />
+          <mesh geometry={crownStructure.branchGeo} material={materials.bark} />
         )}
 
-        {/* Dense leaf tufts on the outer twigs — one instanced, collision-aware,
-            wind-swayed draw call. Carved clear of houses/bridges. */}
+        {/* Instanced canopy leaves. */}
         <LeafClumps
           clumps={crownStructure.sprigs}
           geometry={sprigGeo}
@@ -1091,8 +1135,7 @@ export function Tree({
           grown={active > 0}
         />
 
-        {/* Cheap invisible ellipsoid that casts the soft canopy shadow, so the
-            dense leaf cloud itself never enters the (expensive) shadow pass. */}
+        {/* Cheap canopy shadow proxy. */}
         {active > 0 && (
           <mesh
             position={[0, crownBounds.cy, 0]}

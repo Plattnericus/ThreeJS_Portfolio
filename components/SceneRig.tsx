@@ -7,10 +7,17 @@ import type { SceneParams } from "@/lib/weather";
 
 // Owns background, fog and lights, and eases every value toward the target
 // SceneParams so weather/time changes fade smoothly instead of snapping.
-export function SceneRig({ params }: { params: SceneParams }) {
-  const { scene } = useThree();
+export function SceneRig({
+  params,
+  shadowsActive = true,
+}: {
+  params: SceneParams;
+  shadowsActive?: boolean;
+}) {
+  const { gl, scene } = useThree();
   const hemi = useRef<THREE.HemisphereLight>(null);
   const dir = useRef<THREE.DirectionalLight>(null);
+  const lastShadowUpdate = useRef(-1);
 
   const cur = useRef({
     bg: new THREE.Color(params.skyColor),
@@ -32,7 +39,7 @@ export function SceneRig({ params }: { params: SceneParams }) {
       params.fogFar,
     );
 
-  useFrame((_, dt) => {
+  useFrame((state, dt) => {
     const k = Math.min(1, dt * 1.4);
     const c = cur.current;
 
@@ -61,6 +68,15 @@ export function SceneRig({ params }: { params: SceneParams }) {
       c.sky.lerp(new THREE.Color(params.skyColor), k);
       hemi.current.color.copy(c.sky);
     }
+
+    gl.shadowMap.autoUpdate = false;
+    if (
+      shadowsActive &&
+      state.clock.elapsedTime - lastShadowUpdate.current > 0.45
+    ) {
+      gl.shadowMap.needsUpdate = true;
+      lastShadowUpdate.current = state.clock.elapsedTime;
+    }
   });
 
   return (
@@ -77,7 +93,7 @@ export function SceneRig({ params }: { params: SceneParams }) {
         intensity={params.sunIntensity}
         color={params.sunColor}
         castShadow
-        shadow-mapSize={[2048, 2048]}
+        shadow-mapSize={[1024, 1024]}
         shadow-camera-near={1}
         shadow-camera-far={70}
         shadow-camera-left={-18}

@@ -31,16 +31,24 @@ export function GrassClumps({
   radius = 8,
   topY = 5.2,
   wind = 1,
+  gust = 0,
+  windVec = [1, 0],
   surface,
 }: {
   count?: number;
   radius?: number;
   topY?: number;
   wind?: number;
+  gust?: number;
+  windVec?: [number, number];
   surface?: SurfaceProfile;
 }) {
   const { scene } = useGLTF(GRASS);
-  const uniforms = useRef({ uTime: { value: 0 }, uWind: { value: wind } });
+  const uniforms = useRef({
+    uTime: { value: 0 },
+    uWind: { value: wind },
+    uWindDir: { value: new THREE.Vector2(windVec[0], windVec[1]) },
+  });
 
   // Normalise every brush layer to a unit-height tuft with its base at y=0,
   // centred in x/z, and wire the wind-sway shader into each material.
@@ -71,16 +79,22 @@ export function GrassClumps({
       m.onBeforeCompile = (shader) => {
         shader.uniforms.uTime = uniforms.current.uTime;
         shader.uniforms.uWind = uniforms.current.uWind;
+        shader.uniforms.uWindDir = uniforms.current.uWindDir;
         shader.vertexShader =
-          "uniform float uTime;\nuniform float uWind;\n" +
+          "uniform float uTime;\nuniform float uWind;\nuniform vec2 uWindDir;\n" +
           shader.vertexShader.replace(
             "#include <begin_vertex>",
             `#include <begin_vertex>
              float sway = max(position.y, 0.0);
              vec4 wp = instanceMatrix * vec4(0.0,0.0,0.0,1.0);
+             vec2 dir = normalize(uWindDir);
+             vec2 side = vec2(-dir.y, dir.x);
              float ph = wp.x * 0.5 + wp.z * 0.4;
-             transformed.x += sin(uTime * 1.3 + ph) * sway * 0.14 * uWind;
-             transformed.z += cos(uTime * 1.05 + ph) * sway * 0.10 * uWind;`,
+             float gust = 0.76 + 0.22 * sin(uTime * 0.42 + ph);
+             float downwind = sway * (0.08 + sin(uTime * 1.1 + ph) * 0.055) * uWind * gust;
+             float lateral = sway * cos(uTime * 1.65 + ph * 1.7) * 0.035 * uWind;
+             transformed.x += dir.x * downwind + side.x * lateral;
+             transformed.z += dir.y * downwind + side.y * lateral;`,
           );
       };
       m.needsUpdate = true;
@@ -125,8 +139,11 @@ export function GrassClumps({
 
   useFrame((state) => {
     uniforms.current.uTime.value = state.clock.elapsedTime;
-    uniforms.current.uWind.value = 0.5 + wind * 0.8;
+    uniforms.current.uWind.value = 0.45 + wind * 0.75 + gust * 0.16;
+    uniforms.current.uWindDir.value.set(windVec[0], windVec[1]).normalize();
   });
+
+  if (count <= 0) return null;
 
   return (
     <group>

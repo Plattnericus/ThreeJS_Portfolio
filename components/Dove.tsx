@@ -16,7 +16,13 @@ const DOVE_SCALE = 1.0;
 const MODEL_YAW = 0;
 const WING_COLOR = "#f4f3ec";
 
-export function Dove({ onFind }: { onFind?: () => void }) {
+export function Dove({
+  interactive = true,
+  onFind,
+}: {
+  interactive?: boolean;
+  onFind?: () => void;
+}) {
   const { scene, animations } = useGLTF(BIRD);
   const wrapper = useRef<THREE.Group>(null);
   const inner = useRef<THREE.Group>(null);
@@ -61,6 +67,13 @@ export function Dove({ onFind }: { onFind?: () => void }) {
       mixer.stopAllAction();
     };
   }, [mixer]);
+
+  useEffect(() => {
+    if (!interactive) {
+      setHovered(false);
+      document.body.style.cursor = "auto";
+    }
+  }, [interactive]);
 
   // calm, findable orbit over the island
   const path = useMemo(
@@ -124,12 +137,20 @@ export function Dove({ onFind }: { onFind?: () => void }) {
     e.stopPropagation();
     onFind?.();
   };
+  const hitHandlers =
+    interactive && onFind
+      ? {
+          onPointerOver: enter,
+          onPointerOut: leave,
+          onClick: click,
+        }
+      : {};
 
   return (
     <group ref={wrapper}>
       <group ref={inner} scale={DOVE_SCALE}>
         {/* generous invisible hit target — the dove is small and moving */}
-        <mesh position={[0, 0.7, 0]} onPointerOver={enter} onPointerOut={leave} onClick={click}>
+        <mesh position={[0, 0.7, 0]} {...hitHandlers}>
           <sphereGeometry args={[1.5, 8, 8]} />
           <meshBasicMaterial transparent opacity={0} depthWrite={false} />
         </mesh>

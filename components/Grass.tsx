@@ -43,17 +43,25 @@ export function Grass({
   radius = 9.5,
   topY = 6.7,
   wind = 1,
+  gust = 0,
+  windVec = [1, 0],
   surface,
 }: {
   count?: number;
   radius?: number;
   topY?: number;
   wind?: number;
+  gust?: number;
+  windVec?: [number, number];
   surface?: SurfaceProfile;
 }) {
   const geom = useMemo(bladeGeometry, []);
   const ref = useRef<THREE.InstancedMesh>(null);
-  const uniforms = useRef({ uTime: { value: 0 }, uWind: { value: wind } });
+  const uniforms = useRef({
+    uTime: { value: 0 },
+    uWind: { value: wind },
+    uWindDir: { value: new THREE.Vector2(windVec[0], windVec[1]) },
+  });
 
   const material = useMemo(() => {
     const m = new THREE.MeshStandardMaterial({
@@ -64,20 +72,28 @@ export function Grass({
     m.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = uniforms.current.uTime;
       shader.uniforms.uWind = uniforms.current.uWind;
+      shader.uniforms.uWindDir = uniforms.current.uWindDir;
       shader.uniforms.uTip = { value: new THREE.Color("#8fae5c") };
       shader.vertexShader =
-        "uniform float uTime;\nuniform float uWind;\nattribute float aPhase;\nattribute float aSpeed;\nvarying float vH;\n" +
+        "uniform float uTime;\nuniform float uWind;\nuniform vec2 uWindDir;\nattribute float aPhase;\nattribute float aSpeed;\nvarying float vH;\n" +
         shader.vertexShader.replace(
           "#include <begin_vertex>",
           `#include <begin_vertex>
            vH = position.y;
            float bend = position.y * position.y;
+           vec2 dir = normalize(uWindDir);
+           vec2 side = vec2(-dir.y, dir.x);
+           vec4 root = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
            // every blade sways on its OWN phase + speed → individual, smooth
-           // motion with no marching wave (Ghost-of-Tsushima style).
-           float t = uTime * aSpeed + aPhase;
-           float gust = 0.72 + 0.28 * sin(uTime * 0.5 + aPhase * 1.7);
-           transformed.x += sin(t) * bend * 0.34 * uWind * gust;
-           transformed.z += cos(t * 0.85 + aPhase) * bend * 0.20 * uWind * gust;`,
+           // motion with no marching wave. Downwind bend is directional; side
+           // flutter is the small turbulence real grass gets in gusts.
+           float stream = dot(root.xz, dir) * 0.34;
+           float t = uTime * aSpeed + aPhase - stream;
+           float gust = 0.74 + 0.22 * sin(uTime * 0.48 + aPhase * 1.7) + 0.08 * sin(uTime * 1.7 + stream);
+           float downwind = bend * (0.18 + sin(t) * 0.08) * uWind * gust;
+           float lateral = bend * sin(t * 1.7 + aPhase) * 0.055 * uWind;
+           transformed.x += dir.x * downwind + side.x * lateral;
+           transformed.z += dir.y * downwind + side.y * lateral;`,
         );
       shader.fragmentShader =
         "uniform vec3 uTip;\nvarying float vH;\n" +
@@ -130,7 +146,8 @@ export function Grass({
 
   useFrame((state) => {
     uniforms.current.uTime.value = state.clock.elapsedTime;
-    uniforms.current.uWind.value = 0.6 + wind * 0.8;
+    uniforms.current.uWind.value = 0.5 + wind * 0.75 + gust * 0.18;
+    uniforms.current.uWindDir.value.set(windVec[0], windVec[1]).normalize();
   });
 
   return (

@@ -2,6 +2,7 @@
 
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { useProgress } from "@react-three/drei";
+import gsap from "gsap";
 
 const MIN_VISIBLE_MS = 900;
 const INSTANT_CACHE_GRACE_MS = 1800;
@@ -15,8 +16,7 @@ type Leaf = { cx: number; cy: number; r: number; c: string; d: number };
 
 const LEAF_COLORS = ["#6fab4e", "#7fb75a", "#9fd272", "#cbe98c", "#d7a756", "#e8f6a5"];
 
-// A recursive line-art tree generated once (seeded → deterministic). Lots of
-// staggered strokes draw outward from the trunk for a rich, "growing" feel.
+// Seeded line-art tree used by the loading screen.
 function buildTree(): { branches: Branch[]; leaves: Leaf[] } {
   let seed = 1337;
   const rng = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
@@ -24,9 +24,8 @@ function buildTree(): { branches: Branch[]; leaves: Leaf[] } {
   const branches: Branch[] = [];
   const leaves: Leaf[] = [];
   const MAX_DEPTH = 5;
-  const STROKE = 0.34; // seconds a single stroke takes to draw
-  // Round outputs: Math.sin/cos can differ by 1 ULP between the server (Node)
-  // and client (browser) engines, which otherwise causes a hydration mismatch.
+  const STROKE = 0.34; // seconds per branch stroke
+  // Round coordinates to avoid hydration drift between runtimes.
   const r2 = (n: number) => Math.round(n * 100) / 100;
   const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
@@ -41,7 +40,7 @@ function buildTree(): { branches: Branch[]; leaves: Leaf[] } {
     if (branches.length > 70) return;
     const x2 = r2(x + Math.sin(angle) * len);
     const y2 = r2(y - Math.cos(angle) * len);
-    // a gentle perpendicular bend so strokes look hand-drawn, not ruler-straight
+    // Add a slight bend so branches do not look mechanical.
     const mx = r2((x + x2) / 2 + Math.cos(angle) * (rng() - 0.5) * len * 0.5);
     const my = r2((y + y2) / 2 + Math.sin(angle) * (rng() - 0.5) * len * 0.5);
     branches.push({
@@ -64,10 +63,10 @@ function buildTree(): { branches: Branch[]; leaves: Leaf[] } {
     const kids = depth === 0 ? 2 : rng() < 0.32 ? 3 : 2;
     const spread = 0.42 + rng() * 0.22;
     for (let i = 0; i < kids; i++) {
-      const f = i / (kids - 1) - 0.5; // -0.5..0.5
+      const f = i / (kids - 1) - 0.5;
       const childAngle = angle + f * spread * 2 + (rng() - 0.5) * 0.18;
       grow(x2, y2, childAngle, len * (0.7 + rng() * 0.08), depth + 1, done + rng() * 0.04);
-      // a few mid-branch leaves on the upper half for fullness
+      // Add a few leaves along upper branches.
       if (depth >= MAX_DEPTH - 2 && rng() < 0.5) {
         leaves.push({
           cx: r2(x2),
@@ -86,15 +85,27 @@ function buildTree(): { branches: Branch[]; leaves: Leaf[] } {
 
 const TREE = buildTree();
 
-export default function LoadingOverlay({ sceneReady }: { sceneReady: boolean }) {
-  const { progress, active } = useProgress();
+export default function LoadingOverlay({
+  sceneReady,
+  dataReady,
+  starsReady,
+  weatherReady,
+}: {
+  sceneReady: boolean;
+  dataReady: boolean;
+  starsReady: boolean;
+  weatherReady: boolean;
+}) {
+  const { progress, active, loaded, total, item } = useProgress();
   const [hidden, setHidden] = useState(false);
   const [exiting, setExiting] = useState(false);
   const [settled, setSettled] = useState(false);
   const [cacheGraceDone, setCacheGraceDone] = useState(false);
   const [sceneGraceDone, setSceneGraceDone] = useState(false);
+  const [idleProgress, setIdleProgress] = useState(12);
   const [displayProgress, setDisplayProgress] = useState(0);
-  const displayRef = useRef(0);
+  const displayRef = useRef({ value: 0 });
+  const progressTween = useRef<gsap.core.Tween | null>(null);
   const sawLoad = useRef(false);
   const revealed = useRef(false);
 
@@ -115,26 +126,43 @@ export default function LoadingOverlay({ sceneReady }: { sceneReady: boolean }) 
     return () => window.clearTimeout(id);
   }, [sceneReady]);
 
+  useEffect(() => {
+    const start = performance.now();
+    const id = window.setInterval(() => {
+      const seconds = (performance.now() - start) / 1000;
+      const softProgress = 12 + Math.log1p(seconds * 1.15) * 18;
+      setIdleProgress(Math.min(92, softProgress));
+    }, 180);
+    return () => window.clearInterval(id);
+  }, []);
+
   const targetProgress = useMemo(() => {
-    if (sawLoad.current) return Math.max(4, progress);
-    return cacheGraceDone ? 100 : 18;
-  }, [cacheGraceDone, progress]);
+    if (sceneReady && sceneGraceDone && dataReady) return 100;
+    if (!dataReady) return Math.min(42, Math.max(12, idleProgress * 0.48));
+
+    const assetProgress = sawLoad.current ? progress : cacheGraceDone ? 18 : 0;
+    const mappedAssets = 44 + assetProgress * 0.48;
+    return Math.min(96, Math.max(mappedAssets, idleProgress));
+  }, [cacheGraceDone, dataReady, idleProgress, progress, sceneGraceDone, sceneReady]);
 
   useEffect(() => {
-    let raf = 0;
-    const tick = () => {
-      let current = displayRef.current;
-      current += (targetProgress - current) * 0.09;
-      if (Math.abs(targetProgress - current) < 0.08) current = targetProgress;
-      displayRef.current = current;
-      setDisplayProgress(current);
-      if (current !== targetProgress) raf = window.requestAnimationFrame(tick);
+    progressTween.current?.kill();
+    const current = displayRef.current.value;
+    const distance = Math.abs(targetProgress - current);
+    progressTween.current = gsap.to(displayRef.current, {
+      value: targetProgress,
+      duration: Math.max(0.32, Math.min(1.2, distance / 52)),
+      ease: "none",
+      overwrite: true,
+      onUpdate: () => setDisplayProgress(displayRef.current.value),
+    });
+    return () => {
+      progressTween.current?.kill();
     };
-    raf = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(raf);
   }, [targetProgress]);
 
   const ready =
+    dataReady &&
     sceneReady &&
     settled &&
     ((!active &&
@@ -144,7 +172,8 @@ export default function LoadingOverlay({ sceneReady }: { sceneReady: boolean }) 
   useEffect(() => {
     if (!ready || revealed.current) return;
     revealed.current = true;
-    displayRef.current = 100;
+    progressTween.current?.kill();
+    displayRef.current.value = 100;
     setDisplayProgress(100);
     setExiting(true);
     const id = window.setTimeout(() => setHidden(true), 920);
@@ -154,28 +183,34 @@ export default function LoadingOverlay({ sceneReady }: { sceneReady: boolean }) 
   if (hidden) return null;
 
   const style: LoaderStyle = {
-    "--load": `${Math.min(100, displayProgress)}%`,
+    "--load": `${Math.min(1, displayProgress / 100)}`,
   };
 
-  // Status line that advances cleanly with progress (each change fades in).
-  const statusMessages = [
-    "Loading assets…",
-    "Growing the tree…",
-    "Raising the village…",
-    "Hanging the bridges…",
-    "Summoning the birds…",
-    "Almost ready…",
-  ];
-  const status =
-    statusMessages[
-      Math.min(
-        statusMessages.length - 1,
-        Math.floor((Math.min(100, displayProgress) / 100) * statusMessages.length),
-      )
-    ];
+  const loadedAssets = total > 0 ? Math.min(loaded, total) : 0;
+  const assetCount = total > 0 ? ` (${loadedAssets} / ${total})` : "";
+  const phase = (() => {
+    if (!starsReady) return "Loading stargazers";
+    if (!weatherReady) return "Loading weather";
+    if (displayProgress < 52) return "Loading assets";
+    if (displayProgress < 76) return "Preparing models";
+    if (displayProgress < 92) return "Building scene";
+    if (displayProgress < 96) return "Starting renderer";
+    return "Opening scene";
+  })();
+  const status = `${phase}${assetCount}`;
+  const itemName = item?.split("/").pop()?.replace(/\?.*$/, "");
+  const detail =
+    total > 0
+      ? itemName
+        ? `Asset ${loadedAssets} of ${total}: ${itemName}`
+        : `Assets ${loadedAssets} of ${total}`
+      : !starsReady
+        ? "Fetching the live village"
+        : !weatherReady
+          ? "Fetching mountain weather"
+          : "Preparing the renderer";
 
-  // Richly branched line-art tree (generated once). Many strokes draw outward
-  // from the trunk via stroke-dashoffset; leaves bloom at the tips after.
+  // Strokes draw outward, then leaves bloom at the tips.
   const { branches, leaves } = TREE;
 
   return (
@@ -229,9 +264,15 @@ export default function LoadingOverlay({ sceneReady }: { sceneReady: boolean }) 
 
         <div className="loader-copy">
           <div className="loader-title">Star Tree</div>
-          <div className="loader-status" key={status}>
-            {status}
+          <div className="loader-status" key={phase}>
+            <span>{status}</span>
+            <span className="loader-dots" aria-hidden="true">
+              <span>.</span>
+              <span>.</span>
+              <span>.</span>
+            </span>
           </div>
+          <div className="loader-detail">{detail}</div>
         </div>
 
         <div className="loader-meter">
@@ -258,7 +299,7 @@ export default function LoadingOverlay({ sceneReady }: { sceneReady: boolean }) 
           pointer-events: none;
         }
 
-        /* one soft, slow-breathing glow behind the tree — no grids/beams/conic */
+        /* Soft glow behind the tree mark. */
         .loader-glow {
           position: absolute;
           top: 38%;
@@ -303,7 +344,7 @@ export default function LoadingOverlay({ sceneReady }: { sceneReady: boolean }) 
           filter: drop-shadow(0 18px 38px rgba(0, 0, 0, 0.4));
         }
 
-        /* gentle, organic idle sway pivoting from the trunk base */
+        /* Subtle idle sway from the trunk base. */
         .loader-canopy {
           transform-box: fill-box;
           transform-origin: 100px 198px;
@@ -342,7 +383,7 @@ export default function LoadingOverlay({ sceneReady }: { sceneReady: boolean }) 
           display: flex;
           flex-direction: column;
           align-items: center;
-          gap: 5px;
+          gap: 6px;
           text-align: center;
           animation: loader-rise 0.8s cubic-bezier(0.22, 1, 0.36, 1) 0.45s both;
         }
@@ -361,11 +402,47 @@ export default function LoadingOverlay({ sceneReady }: { sceneReady: boolean }) 
         }
 
         .loader-status {
+          display: inline-flex;
+          align-items: baseline;
+          justify-content: center;
           font-size: 12px;
           letter-spacing: 0.04em;
           color: rgba(203, 233, 140, 0.7);
-          min-height: 1em;
+          min-height: 1.15em;
           animation: status-in 0.5s ease both;
+        }
+
+        .loader-dots {
+          display: inline-flex;
+          width: 1.05em;
+          margin-left: 1px;
+          text-align: left;
+        }
+
+        .loader-dots span {
+          opacity: 0.22;
+          transform: translateY(0);
+          animation: loader-dot 1.15s ease-in-out infinite;
+        }
+
+        .loader-dots span:nth-child(2) {
+          animation-delay: 0.16s;
+        }
+
+        .loader-dots span:nth-child(3) {
+          animation-delay: 0.32s;
+        }
+
+        .loader-detail {
+          max-width: min(360px, 72vw);
+          min-height: 1em;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          color: rgba(255, 255, 255, 0.34);
+          font-size: 10px;
+          letter-spacing: 0.03em;
+          font-variant-numeric: tabular-nums;
         }
 
         @keyframes status-in {
@@ -389,11 +466,30 @@ export default function LoadingOverlay({ sceneReady }: { sceneReady: boolean }) 
         }
 
         .loader-meter-fill {
-          width: var(--load);
+          width: 100%;
           height: 100%;
           border-radius: inherit;
+          position: relative;
+          overflow: hidden;
           background: linear-gradient(90deg, #6f9a4d, #cbe98c, #d7a756);
-          transition: width 200ms cubic-bezier(0.22, 1, 0.36, 1);
+          transform: scaleX(var(--load));
+          transform-origin: left center;
+          will-change: transform;
+          transition: transform 80ms linear;
+        }
+
+        .loader-meter-fill::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(
+            90deg,
+            transparent,
+            rgba(255, 255, 255, 0.42),
+            transparent
+          );
+          transform: translateX(-120%);
+          animation: loader-sheen 1.55s linear infinite;
         }
 
         .loader-percent {
@@ -423,6 +519,23 @@ export default function LoadingOverlay({ sceneReady }: { sceneReady: boolean }) 
           to {
             opacity: 1;
             transform: translateY(0);
+          }
+        }
+
+        @keyframes loader-dot {
+          0%, 100% {
+            opacity: 0.22;
+            transform: translateY(0);
+          }
+          38% {
+            opacity: 1;
+            transform: translateY(-1px);
+          }
+        }
+
+        @keyframes loader-sheen {
+          to {
+            transform: translateX(120%);
           }
         }
 
@@ -485,6 +598,10 @@ export default function LoadingOverlay({ sceneReady }: { sceneReady: boolean }) 
           }
           .loader-ground {
             transform: scaleX(1);
+            animation: none;
+          }
+          .loader-dots span,
+          .loader-meter-fill::after {
             animation: none;
           }
         }

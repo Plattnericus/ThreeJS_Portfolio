@@ -113,8 +113,11 @@ export default function SearchBar({
   };
 
   return (
-    <div ref={rootRef} className="anim-rise-x absolute left-1/2 top-5 z-30 -translate-x-1/2">
-      <div className="relative w-[min(92vw,380px)]">
+    <div
+      ref={rootRef}
+      className="anim-rise-x absolute left-4 right-20 top-5 z-30 sm:left-1/2 sm:right-auto sm:-translate-x-1/2"
+    >
+      <div className="relative w-full sm:w-[min(92vw,380px)]">
         <div className="relative overflow-hidden rounded-full border border-white/12 bg-[#0d1410]/55 shadow-2xl shadow-black/35 backdrop-blur-2xl transition focus-within:border-[#9fd272]/55 focus-within:bg-[#0d1410]/72">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_50%,rgba(159,210,114,0.24),transparent_34%),linear-gradient(90deg,rgba(255,255,255,0.08),transparent_42%)] opacity-70" />
           <SearchIcon className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#b9e78b]" />

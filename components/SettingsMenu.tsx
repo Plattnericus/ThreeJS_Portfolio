@@ -18,9 +18,9 @@ import {
 } from "./Icons";
 
 const SKIES: Sky[] = ["clear", "clouds", "fog", "rain", "snow", "storm"];
+const GRAPHICS: GraphicsQuality[] = ["auto", "low", "medium", "high"];
 
-// One deliberate accent per condition — pulled from the scene's own palette so
-// the panel reads as part of the world, just a touch heightened.
+// Condition accents reuse the scene palette so the panel stays visually connected.
 const SKY_ACCENT: Record<Sky, string> = {
   clear: "#e6b25a",
   clouds: "#9fb2bd",
@@ -53,7 +53,10 @@ export type ManualDate = {
   hour: number; // 0..23
 };
 
-// Compact relative phrasing for the sneaky sync line ("synced 12s ago").
+export type GraphicsQuality = "auto" | "low" | "medium" | "high";
+type ResolvedGraphicsQuality = Exclude<GraphicsQuality, "auto">;
+
+// Compact relative phrasing for the refresh status.
 function relTime(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 5) return "just now";
@@ -64,6 +67,26 @@ function relTime(ms: number): string {
   return `${h}h ago`;
 }
 
+function countdown(ms: number | null): string {
+  if (ms === null) return "--:--";
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function cardinal(deg: number | undefined): string {
+  if (typeof deg !== "number" || !Number.isFinite(deg)) return "--";
+  const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  return dirs[Math.round((((deg % 360) + 360) % 360) / 45) % dirs.length];
+}
+
+function isTextInputTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName.toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable;
+}
+
 export default function SettingsMenu({
   weather,
   mode,
@@ -71,9 +94,13 @@ export default function SettingsMenu({
   manualSky,
   starsLive,
   lastSync,
+  nextSync,
+  graphicsQuality,
+  resolvedGraphicsQuality,
   onMode,
   onDate,
   onSky,
+  onGraphicsQuality,
 }: {
   weather: Weather | null;
   mode: "live" | "manual";
@@ -81,9 +108,13 @@ export default function SettingsMenu({
   manualSky: Sky;
   starsLive: boolean;
   lastSync: number | null;
+  nextSync: number | null;
+  graphicsQuality: GraphicsQuality;
+  resolvedGraphicsQuality: ResolvedGraphicsQuality;
   onMode: (m: "live" | "manual") => void;
   onDate: (d: ManualDate) => void;
   onSky: (s: Sky) => void;
+  onGraphicsQuality: (q: GraphicsQuality) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -96,17 +127,21 @@ export default function SettingsMenu({
   const sweepRef = useRef<HTMLDivElement>(null);
   const season = seasonFromMonth(Math.min(11, Math.max(0, date.month - 1)));
   const seasonColor = SEASON_ACCENT[season];
+  const nextMs = nextSync ? Math.max(0, nextSync - Date.now()) : null;
+  const syncWindow = lastSync && nextSync ? Math.max(1, nextSync - lastSync) : 1;
+  const syncProgress =
+    lastSync && nextSync
+      ? Math.min(100, Math.max(0, ((Date.now() - lastSync) / syncWindow) * 100))
+      : 0;
 
-  // Re-render once a second while the panel is open so the relative sync time
-  // keeps ticking; idle (closed) it costs nothing.
+  // Keep the sync timer fresh only while the panel is mounted.
   useEffect(() => {
     if (!mounted) return;
     const id = window.setInterval(() => setTick((t) => t + 1), 1000);
     return () => window.clearInterval(id);
   }, [mounted]);
 
-  // The gear-button morph: gear spins out, close spins in (and back). A soft
-  // ring ripples on every toggle for a tactile "click" read.
+  // Morph the gear into a close icon with a short tactile ripple.
   useEffect(() => {
     const gear = gearIconRef.current;
     const close = closeIconRef.current;
@@ -114,7 +149,6 @@ export default function SettingsMenu({
     gsap.killTweensOf([gear, close, rippleRef.current]);
 
     if (open) {
-      // gear glides out to the left, the close glides in from the right.
       gsap
         .timeline()
         .to(gear, { x: -20, autoAlpha: 0, duration: 0.26, ease: "power2.in" })
@@ -125,7 +159,6 @@ export default function SettingsMenu({
           "-=0.15",
         );
     } else {
-      // reverse: close glides out to the right, the gear glides back from the left.
       gsap
         .timeline()
         .to(close, { x: 20, autoAlpha: 0, duration: 0.24, ease: "power2.in" })
@@ -146,7 +179,7 @@ export default function SettingsMenu({
     }
   }, [open]);
 
-  // Panel choreography: spring down + deblur, stagger the rows, sweep a sheen.
+  // Open the panel with a compact spring and row stagger.
   useEffect(() => {
     if (!mounted || !panelRef.current) return;
     const panel = panelRef.current;
@@ -200,18 +233,24 @@ export default function SettingsMenu({
   }, [mounted, open]);
 
   useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || isTextInputTarget(event.target)) return;
+      event.preventDefault();
+      setMounted(true);
+      setOpen((value) => !value);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => {
     if (!mounted) return;
     const close = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
     window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", onKey);
     };
   }, [mounted]);
 
@@ -244,8 +283,7 @@ export default function SettingsMenu({
 
   return (
     <div ref={rootRef} className="anim-slide-right absolute right-5 top-5 text-right">
-      {/* The whole circle gently glides left↔right on a clean, transform-only
-          loop. It eases to a stop while the panel is open so the panel stays put. */}
+      {/* Transform-only idle motion for the settings trigger. */}
       <span className={`gear-float inline-block ${open ? "gear-float--rest" : ""}`}>
         <button
           onClick={() => {
@@ -281,14 +319,14 @@ export default function SettingsMenu({
       {mounted && (
         <div
           ref={panelRef}
-          className="relative mt-2 w-[310px] overflow-hidden rounded-2xl border border-white/10 text-left opacity-0 shadow-2xl shadow-black/55 backdrop-blur-2xl ring-1 ring-[#9fd272]/10"
+          className="relative mt-2 w-[340px] overflow-hidden rounded-2xl border border-white/10 text-left opacity-0 shadow-2xl shadow-black/55 backdrop-blur-2xl ring-1 ring-[#9fd272]/10"
         >
           <div
             ref={sweepRef}
             className="pointer-events-none absolute inset-y-0 left-0 z-10 w-1/2 -skew-x-12 bg-gradient-to-r from-transparent via-white/12 to-transparent opacity-0"
           />
-          <div className="relative bg-gradient-to-br from-[#1c2a1f]/86 via-[#111b16]/88 to-[#0a100d]/92 px-4 pb-3.5 pt-4">
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_10%,rgba(159,210,114,0.16),transparent_34%),radial-gradient(circle_at_92%_22%,rgba(230,178,90,0.12),transparent_28%)]" />
+          <div className="relative bg-gradient-to-br from-[#1a2a21]/92 via-[#101a16]/91 to-[#08100d]/95 px-4 pb-3.5 pt-4">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_10%,rgba(159,210,114,0.17),transparent_34%),radial-gradient(circle_at_92%_22%,rgba(230,178,90,0.11),transparent_28%),linear-gradient(135deg,rgba(255,255,255,0.05),transparent_42%)]" />
             <div data-settings-item className="relative flex items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2">
@@ -296,19 +334,21 @@ export default function SettingsMenu({
                     className={`h-2 w-2 rounded-full ${mode === "live" ? "settings-pulse" : ""}`}
                     style={{ background: mode === "live" ? "#7ec85a" : "#6b7280" }}
                   />
-                  <span className="text-[13px] font-semibold tracking-tight text-white">
-                    Sterzing, IT
+                  <span className="text-[13px] font-semibold tracking-tight text-white/95">
+                    Gossensass, Brenner
                   </span>
                 </div>
                 <div className="mt-1 text-[11px] text-white/48">
                   {weather
-                    ? `${Math.round(weather.tempC)}°C · ${weather.sky}`
+                    ? `${Math.round(weather.tempC)}°C · ${weather.sky} · ${Math.round(weather.humidity)}% RH`
                     : "loading"}
                 </div>
               </div>
-              <div className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.055] px-2 py-1 text-[11px] font-semibold text-white/62">
+              <div className="flex max-w-[142px] items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.065] px-2 py-1 text-[11px] font-semibold leading-tight text-white/66">
                 <WindIcon className="h-3.5 w-3.5 text-[#9fd272]" />
-                {weather ? `${Math.round(weather.windKmh)} km/h` : "--"}
+                {weather
+                  ? `${Math.round(weather.windKmh)} km/h ${cardinal(weather.windDeg)} · ${Math.round(weather.gustKmh)} gust`
+                  : "--"}
               </div>
             </div>
           </div>
@@ -328,6 +368,37 @@ export default function SettingsMenu({
                   {m}
                 </button>
               ))}
+            </div>
+
+            <div data-settings-item>
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-white/42">
+                  Graphics
+                </span>
+                <span className="text-[11px] font-semibold capitalize text-white/55">
+                  {graphicsQuality === "auto"
+                    ? `Auto · ${resolvedGraphicsQuality}`
+                    : graphicsQuality}
+                </span>
+              </div>
+              <div className="grid grid-cols-4 gap-1 rounded-xl border border-white/10 bg-black/28 p-1">
+                {GRAPHICS.map((q) => {
+                  const active = graphicsQuality === q;
+                  return (
+                    <button
+                      key={q}
+                      onClick={() => onGraphicsQuality(q)}
+                      className={`rounded-lg py-2 text-[11px] font-semibold capitalize transition ${
+                        active
+                          ? "bg-white/88 text-[#0a100d] shadow-sm shadow-white/18"
+                          : "text-white/52 hover:bg-white/[0.06] hover:text-white"
+                      }`}
+                    >
+                      {q}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             <div
@@ -392,23 +463,36 @@ export default function SettingsMenu({
             </div>
           </div>
 
-          {/* Sneaky stargazer sync readout — the heartbeat of the live village. */}
+          {/* Stargazer refresh status. */}
           <div
             data-settings-item
-            className="flex items-center justify-between border-t border-white/[0.07] bg-black/30 px-4 py-2.5"
+            className="border-t border-white/[0.07] bg-black/32 px-4 py-3"
           >
-            <span className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-white/35">
-              <span className="relative grid h-2 w-2 place-items-center">
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${starsLive ? "settings-pulse" : ""}`}
-                  style={{ background: starsLive ? "#7ec85a" : "#6b7280" }}
-                />
+            <div className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-white/38">
+                <span className="relative grid h-2 w-2 place-items-center">
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${starsLive ? "settings-pulse" : ""}`}
+                    style={{ background: starsLive ? "#7ec85a" : "#6b7280" }}
+                  />
+                </span>
+                Stargazers
               </span>
-              Stargazers
-            </span>
-            <span className="text-[11px] font-semibold tabular-nums text-white/55">
-              {lastSync ? `synced ${relTime(Date.now() - lastSync)}` : "syncing…"}
-            </span>
+              <span className="text-[11px] font-semibold tabular-nums text-white/58">
+                {lastSync ? `synced ${relTime(Date.now() - lastSync)}` : "syncing..."}
+              </span>
+            </div>
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.08]">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-[#7ec85a] via-[#9fd272] to-[#e6b25a] transition-[width] duration-500 ease-linear"
+                  style={{ width: `${syncProgress}%` }}
+                />
+              </div>
+              <span className="min-w-[72px] text-right text-[11px] font-semibold tabular-nums text-[#9fd272]/82">
+                {nextMs === 0 ? "refreshing" : `next ${countdown(nextMs)}`}
+              </span>
+            </div>
           </div>
         </div>
       )}
@@ -421,7 +505,7 @@ export default function SettingsMenu({
           0%, 100% { box-shadow: 0 0 0 0 rgba(126, 200, 90, 0.5); }
           50% { box-shadow: 0 0 0 4px rgba(126, 200, 90, 0); }
         }
-        /* The whole circle glides left↔right — clean, GPU-friendly transform loop. */
+        /* GPU-friendly idle motion for the settings trigger. */
         .gear-float {
           animation: gear-float 4.2s ease-in-out infinite;
           will-change: transform;
@@ -432,13 +516,13 @@ export default function SettingsMenu({
           50% { transform: translateX(-7px); }
           100% { transform: translateX(7px); }
         }
-        /* Open → ease the float to rest so the panel stays anchored. */
+        /* Keep the panel anchored while it is open. */
         .gear-float--rest {
           animation: none;
           transform: translateX(0);
           transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
         }
-        /* The gear is never fully still — a slow, calm idle rotation. */
+        /* Slow idle rotation for a subtle active state. */
         .settings-gear-idle {
           animation: settings-gear-idle 14s linear infinite;
         }

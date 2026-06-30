@@ -74,7 +74,7 @@ export function Island({
     const mat = grassRockMaterial(snowU);
     root.traverse((obj) => {
       if (!(obj instanceof THREE.Mesh)) return;
-      obj.castShadow = true;
+      obj.castShadow = false;
       obj.receiveShadow = true;
       obj.material = mat;
     });

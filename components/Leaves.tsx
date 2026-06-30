@@ -34,11 +34,13 @@ type LeafSlot = {
 export function Leaves({
   stars,
   wind = 1,
+  windVec = [1, 0],
   leafColor = "#6fae4f",
   snow = 0,
 }: {
   stars: number;
   wind?: number;
+  windVec?: [number, number];
   leafColor?: string;
   snow?: number;
 }) {
@@ -100,7 +102,10 @@ export function Leaves({
       mesh.scale.y = mesh.scale.z = mesh.scale.x;
       // wind sway scales with the live wind value
       const sway = Math.sin(t * (1.0 + wind * 0.6) + slots[i].phase) * 0.1 * wind;
-      mesh.rotation.z = slots[i].rot.z + sway;
+      mesh.position.x = slots[i].pos.x + windVec[0] * sway * 0.6;
+      mesh.position.z = slots[i].pos.z + windVec[1] * sway * 0.6;
+      mesh.rotation.z = slots[i].rot.z + sway * (windVec[0] || 1);
+      mesh.rotation.x = slots[i].rot.x + sway * windVec[1] * 0.35;
     }
   });
 
