@@ -7,12 +7,12 @@ import type { SceneParams } from "@/lib/weather";
 
 // Palette anchors for the gradient sky. Sunrise/sunset push the horizon to warm
 // orange and the zenith to a soft purple for that cinematic, real-light look.
-const NIGHT_H = new THREE.Color("#121b2e");
-const DAY_H = new THREE.Color("#aecfe6");
-const SUNSET_H = new THREE.Color("#ff8a44");
-const NIGHT_Z = new THREE.Color("#060b18");
-const DAY_Z = new THREE.Color("#2f6fb0");
-const SUNSET_Z = new THREE.Color("#5a4a86");
+const NIGHT_H = new THREE.Color("#1b2330");
+const DAY_H = new THREE.Color("#b8d3df");
+const SUNSET_H = new THREE.Color("#e88b4d");
+const NIGHT_Z = new THREE.Color("#0b1020");
+const DAY_Z = new THREE.Color("#477fa7");
+const SUNSET_Z = new THREE.Color("#5b4f72");
 
 /**
  * A big sky dome (follows the camera) with a custom gradient + sun-glow shader.
@@ -56,14 +56,14 @@ export function Sky({ params }: { params: SceneParams }) {
             vec3 col = mix(uHorizon, uZenith, pow(clamp(d.y, 0.0, 1.0), 0.5));
             // sun: soft halo + tight disc
             float s = max(dot(d, uSunDir), 0.0);
-            float halo = pow(s, 5.0) * 0.45 + pow(s, 90.0) * 0.9 + pow(s, 1600.0) * 3.0;
+            float halo = pow(s, 5.0) * 0.34 + pow(s, 90.0) * 0.7 + pow(s, 1600.0) * 2.2;
             col += uSunColor * halo * uGlow;
             // warm glow hugging the horizon toward the sun (sunrise/sunset)
             vec2 dh = normalize(vec2(d.x, d.z) + 1e-5);
             vec2 sh = normalize(vec2(uSunDir.x, uSunDir.z) + 1e-5);
             float toward = pow(max(dot(dh, sh), 0.0), 2.5);
             float band = (1.0 - smoothstep(0.0, 0.28, abs(d.y)));
-            col += uSunColor * band * toward * uGlow * 0.6;
+            col += uSunColor * band * toward * uGlow * 0.46;
             gl_FragColor = vec4(col, 1.0);
           }
         `,

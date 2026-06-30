@@ -349,10 +349,10 @@ function makeLeafMaterial(
         #endif
         float hf = 0.35 + max(transformed.y, 0.0) * 0.6;
         // constant downwind lean (scales with wind speed) + gusty flutter
-        transformed.x += uWind * 0.06 * hf;
-        transformed.x += (sin(uTime * 1.7 + ph) * 0.07 + sin(uTime * 3.6 + ph * 1.7) * 0.035) * uWind * hf;
-        transformed.z += (cos(uTime * 1.4 + ph) * 0.06) * uWind * hf;
-        transformed.y += sin(uTime * 2.2 + ph * 1.3) * 0.025 * uWind * hf;
+        transformed.x += uWind * 0.035 * hf;
+        transformed.x += (sin(uTime * 1.25 + ph) * 0.04 + sin(uTime * 2.6 + ph * 1.7) * 0.018) * uWind * hf;
+        transformed.z += (cos(uTime * 1.1 + ph) * 0.035) * uWind * hf;
+        transformed.y += sin(uTime * 1.6 + ph * 1.3) * 0.014 * uWind * hf;
         `,
       );
   };
@@ -386,14 +386,15 @@ function makeLeafSprigGeometry(): THREE.BufferGeometry {
   shape.bezierCurveTo(0.15, 0.03, 0.12, 0.3, 0, 0.4);
   shape.bezierCurveTo(-0.12, 0.3, -0.15, 0.03, 0, -0.05);
   const geos: THREE.BufferGeometry[] = [];
-  const N = 6;
+  const N = 28;
   for (let i = 0; i < N; i++) {
-    const g = new THREE.ShapeGeometry(shape, 3);
-    g.rotateX(-0.5 - (i % 3) * 0.22); // tilt + droop
+    const g = new THREE.ShapeGeometry(shape, 5);
+    g.scale(1.28, 1.28, 1.28);
+    g.rotateX(-0.45 - (i % 5) * 0.15); // tilt + droop
     g.rotateY(i * 2.39996 + 0.5); // golden-angle fan
-    g.translate(0, 0.24, 0); // tuft sits at the top of the little twig
+    g.translate((i % 4 - 1.5) * 0.045, 0.26 + (i % 7) * 0.018, ((i * 7) % 7 - 3) * 0.032);
     const cnt = g.getAttribute("position").count;
-    const shade = 0.78 + (i % 3) * 0.08; // subtle two-tone
+    const shade = 0.72 + (i % 7) * 0.045; // subtle multi-tone
     g.setAttribute(
       "color",
       new THREE.BufferAttribute(new Float32Array(cnt * 3).fill(shade), 3),
@@ -675,9 +676,9 @@ export function Tree({
           node.elbow.clone().sub(node.base),
           node.tip.clone().sub(node.base),
         ],
-        node.radius,
-        node.radius * 0.22,
-        24,
+        node.radius * 1.08,
+        node.radius * 0.24,
+        30,
         8,
         node.phase,
       );
@@ -807,17 +808,55 @@ export function Tree({
         .normalize();
       return dir.clone().applyAxisAngle(axis, spread).addScaledVector(UP, 0.28).normalize();
     };
-    const addLeaf = (p: THREE.Vector3) => {
-      const scl = 0.4 + rnd() * 0.32; // small leaves
+    const addLeaf = (p: THREE.Vector3, anchor?: THREE.Vector3, twigRadius = 0.018) => {
+      const scl = 0.78 + rnd() * 0.54; // full visible leaf tufts
       if (blocked(p, scl)) return; // never on a house/bridge
+      if (anchor) {
+        const d = p.distanceTo(anchor);
+        if (d > 0.05) {
+          const mid = anchor.clone().lerp(p, 0.65);
+          mid.y += d * 0.08;
+          branchGeos.push(
+            makeTaperedTubeGeometry(
+              [anchor, mid, p],
+              twigRadius,
+              twigRadius * 0.42,
+              2,
+              4,
+              seed * 0.37,
+            ),
+          );
+        }
+      }
       sprigs.push({
         pos: p,
         rot: [rnd() * Math.PI * 2, rnd() * Math.PI * 2, rnd() * Math.PI],
         scl,
       });
     };
+    const addLeafBurst = (
+      anchor: THREE.Vector3,
+      dir: THREE.Vector3,
+      count: number,
+      spread: number,
+      twigRadius: number,
+    ) => {
+      for (let b = 0; b < count; b++) {
+        const side = new THREE.Vector3(
+          Math.cos(seed * 0.91 + b * 2.399),
+          (rnd() - 0.45) * 0.7,
+          Math.sin(seed * 0.91 + b * 2.399),
+        )
+          .addScaledVector(dir, 0.65 + rnd() * 0.55)
+          .normalize();
+        const p = anchor
+          .clone()
+          .addScaledVector(side, spread * (0.45 + rnd() * 0.7));
+        addLeaf(p, anchor, twigRadius);
+      }
+    };
 
-    let budget = THREE.MathUtils.clamp(Math.round(span * 110), 5200, 12000); // segment cap (perf)
+    let budget = THREE.MathUtils.clamp(Math.round(span * 190), 7600, 18000); // segment cap (perf)
     const grow = (
       pos: THREE.Vector3,
       dir: THREE.Vector3,
@@ -831,20 +870,14 @@ export function Tree({
       if (blocked(end, rad * 3 + 0.25)) return; // carve around houses/bridges
       const mid = pos.clone().addScaledVector(dir, len * 0.5);
       branchGeos.push(makeTaperedTubeGeometry([pos, mid, end], rad, rad * 0.66, 3, 4, seed * 0.7));
-      // dense small-leaf tufts, thickening toward the fine outer twigs
-      if (depth <= 3) addLeaf(end.clone().addScaledVector(dir, 0.08));
-      if (depth <= 2)
-        addLeaf(end.clone().add(new THREE.Vector3((rnd() - 0.5) * 0.24, 0.04, (rnd() - 0.5) * 0.24)));
-      if (depth <= 1) {
-        addLeaf(end.clone().add(new THREE.Vector3((rnd() - 0.5) * 0.3, -0.08, (rnd() - 0.5) * 0.3)));
-        addLeaf(end.clone().addScaledVector(dir, 0.12));
-      }
       if (depth <= 0 || len < 0.34) {
-        addLeaf(end);
-        addLeaf(end.clone().addScaledVector(dir, 0.12));
-        addLeaf(end.clone().add(new THREE.Vector3((rnd() - 0.5) * 0.2, -0.06, (rnd() - 0.5) * 0.2)));
+        addLeafBurst(end, dir, 10, 0.48, rad * 0.16);
         return; // terminal twig
       }
+      // dense small-leaf tufts, thickening toward the fine outer twigs
+      if (depth <= 3) addLeafBurst(end, dir, 1, 0.18, rad * 0.22);
+      if (depth <= 2) addLeafBurst(end, dir, 2, 0.26, rad * 0.2);
+      if (depth <= 1) addLeafBurst(end, dir, 6, 0.4, rad * 0.18);
       const n = depth >= 3 ? (rnd() < 0.5 ? 3 : 2) : 2;
       for (let c = 0; c < n; c++) {
         // tighter spread → a tidier, less sprawly crown
@@ -856,7 +889,7 @@ export function Tree({
     // up to the apex, CAPPING the trunk tip. Boughs grow from the spine toward
     // shell points (golden-angle, outward-biased, jittered → rounded but not a
     // perfect ball); short segments fork into leafy twigs.
-    const NC = THREE.MathUtils.clamp(Math.round(span * 4.6 + 30), 40, 320);
+    const NC = THREE.MathUtils.clamp(Math.round(span * 9.2 + 72), 110, 620);
     for (let i = 0; i < NC; i++) {
       const v = i / Math.max(1, NC - 1); // 0 (base) .. 1 (apex)
       const ty = cBot + v * (apexY - cBot) + (rnd() - 0.5) * 0.9;
@@ -874,7 +907,7 @@ export function Tree({
       const dir = target.clone().sub(sp);
       if (dir.lengthSq() < 0.01) continue;
       dir.normalize();
-      grow(sp, dir, 1.5 + rnd() * 0.5, 0.085, 5); // thin, short-segmented, leafy boughs
+      grow(sp, dir, 1.8 + rnd() * 0.65, 0.09, 5); // longer, clean boughs before the fine twigs
     }
     // (b) per-platform NEST — a dense ring of boughs hugging each platform so every
     // treehouse nestles in leaves (carved off the deck itself). The leaves wrap the
@@ -893,7 +926,7 @@ export function Tree({
           .clone()
           .add(new THREE.Vector3(Math.cos(a) * dr * 1.04, -0.25 + rnd() * 0.3, Math.sin(a) * dr * 1.04));
         const out = new THREE.Vector3(Math.cos(a) * 0.85, 0.45 + rnd() * 0.6, Math.sin(a) * 0.85).normalize();
-        grow(o, out, 1.0 + rnd() * 0.6, 0.06, 3); // short, leafy collar twigs
+        grow(o, out, 1.15 + rnd() * 0.65, 0.06, 3); // short, leafy collar twigs
       }
       // a few boughs just OUTSIDE the rim reaching UP → a leafy backdrop rising
       // above the roofline (anchored clear of the deck column so they aren't carved).
@@ -902,7 +935,7 @@ export function Tree({
         const o = tip
           .clone()
           .add(new THREE.Vector3(Math.cos(a) * dr * 1.08, 0.1, Math.sin(a) * dr * 1.08));
-        grow(o, new THREE.Vector3(Math.cos(a) * 0.35, 1, Math.sin(a) * 0.35).normalize(), 1.4 + rnd() * 0.6, 0.055, 3);
+        grow(o, new THREE.Vector3(Math.cos(a) * 0.35, 1, Math.sin(a) * 0.35).normalize(), 1.65 + rnd() * 0.65, 0.055, 3);
       }
     }
     // (c) TIP CAP — a dense leafy knot wrapping the top of the trunk on all sides
@@ -911,36 +944,39 @@ export function Tree({
       const a = k * GA + 0.3;
       const o = spineAt(trunkTopY - rnd() * 1.6); // from just below the tip up to it
       const out = new THREE.Vector3(Math.cos(a), 0.25 + rnd() * 0.7, Math.sin(a)).normalize();
-      grow(o, out, 0.7 + rnd() * 0.7, 0.05, 3);
+      grow(o, out, 0.9 + rnd() * 0.75, 0.05, 3);
     }
     const tipBase = spineAt(trunkTopY);
     for (let k = 0; k < 26; k++) {
-      addLeaf(
-        tipBase
-          .clone()
-          .add(new THREE.Vector3((rnd() - 0.5) * 1.3, rnd() * 1.5 - 0.2, (rnd() - 0.5) * 1.3)),
-      );
+      const p = tipBase
+        .clone()
+        .add(new THREE.Vector3((rnd() - 0.5) * 1.3, rnd() * 1.5 - 0.2, (rnd() - 0.5) * 1.3));
+      addLeaf(p, tipBase, 0.024);
     }
 
-    // (d) APEX FILL — extra leaf clumps packed straight into the TOP of the crown
-    // envelope (no branch needed; leaves are one cheap instanced draw call) so the
-    // upper silhouette reads as one full, rounded mass instead of wispy bare twigs
-    // poking out. Fills the upper ~45% of the dome, fullest at the crown.
+    // (d) APEX TWIG FILL — the top crown stays full, but every leaf is generated
+    // by a short branch recursion from the spine. No free-floating filler leaves.
     const topStart = cBot + span * 0.55;
-    const NF = THREE.MathUtils.clamp(Math.round(span * 30), 160, 640);
+    const NF = THREE.MathUtils.clamp(Math.round(span * 18), 120, 360);
     for (let i = 0; i < NF; i++) {
       const ty = topStart + (i / Math.max(1, NF - 1)) * (apexY + 0.8 - topStart) + (rnd() - 0.5) * 0.8;
       const vv = THREE.MathUtils.clamp((ty - cBot) / span, 0, 1);
       const cap = Math.pow(Math.max(0, (vv - 0.85) / 0.15), 2);
       const domeR = cRX * (0.5 + 0.5 * Math.min(1, vv * 1.2)) * (1 - 0.5 * cap);
       const a = i * GA + rnd() * 0.6;
-      const rr = Math.sqrt(rnd()); // fill the interior AND the shell evenly
-      addLeaf(new THREE.Vector3(Math.cos(a) * domeR * rr, ty, Math.sin(a) * domeR * rr));
+      const rr = 0.35 + 0.65 * Math.sqrt(rnd()); // fuller shell, still supported by twigs
+      const target = new THREE.Vector3(Math.cos(a) * domeR * rr, ty, Math.sin(a) * domeR * rr);
+      if (blocked(target, 0.7)) continue;
+      const oy = THREE.MathUtils.clamp(ty - 0.8 - rnd() * 1.5, cBot, trunkTopY);
+      const sp = spineAt(oy);
+      const dir = target.clone().sub(sp);
+      if (dir.lengthSq() < 0.01) continue;
+      grow(sp, dir.normalize(), 1.35 + rnd() * 0.55, 0.058, 4);
     }
 
     const branchGeo = branchGeos.length ? mergeGeometries(branchGeos, false) : null;
     return { branchGeo, sprigs };
-  }, [nodes, active, stargazers]);
+  }, [nodes, active, stargazers, stars]);
 
   useEffect(() => {
     branchRefs.current.forEach((group, i) => {
@@ -971,13 +1007,13 @@ export function Tree({
     windUniforms.current.uWind.value = w;
     if (!swayRef.current) return;
     // the whole crown leans DOWNWIND (more in stronger wind) and sways/whips
-    const lean = Math.min(0.17, 0.025 + wind * 0.045) * gust;
-    swayRef.current.rotation.z = -lean + Math.sin(t * (0.7 + wind * 0.15)) * 0.02 * wind;
-    swayRef.current.rotation.x = Math.cos(t * 0.5 + 1.3) * 0.012 * wind;
+    const lean = Math.min(0.13, 0.018 + wind * 0.034) * gust;
+    swayRef.current.rotation.z = -lean + Math.sin(t * (0.62 + wind * 0.12)) * 0.014 * wind;
+    swayRef.current.rotation.x = Math.cos(t * 0.46 + 1.3) * 0.008 * wind;
     branchRefs.current.forEach((group, i) => {
       if (!group || !group.visible) return;
-      group.rotation.z = Math.sin(t * (1.1 + wind * 0.22) + i * 0.7) * 0.04 * w;
-      group.rotation.x = Math.cos(t * 0.8 + i) * 0.022 * w;
+      group.rotation.z = Math.sin(t * (0.95 + wind * 0.16) + i * 0.7) * 0.026 * w;
+      group.rotation.x = Math.cos(t * 0.72 + i) * 0.014 * w;
     });
   });
 

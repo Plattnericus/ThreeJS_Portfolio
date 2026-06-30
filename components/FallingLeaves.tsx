@@ -1,0 +1,204 @@
+"use client";
+
+import { useEffect, useMemo, useRef } from "react";
+import { useFrame } from "@react-three/fiber";
+import * as THREE from "three";
+import type { Season } from "@/lib/weather";
+import type { SurfaceProfile } from "@/lib/surface";
+
+const MAX_LEAVES = 110;
+const TMP = new THREE.Object3D();
+
+type LeafState = {
+  pos: THREE.Vector3;
+  vel: THREE.Vector3;
+  rot: THREE.Euler;
+  spin: THREE.Vector3;
+  scale: number;
+  landed: boolean;
+  visible: boolean;
+  landedAt: number;
+  phase: number;
+};
+
+function mulberry(seed: number) {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function makeLeafGeometry() {
+  const s = new THREE.Shape();
+  s.moveTo(0, -0.11);
+  s.bezierCurveTo(0.24, 0.02, 0.2, 0.45, 0, 0.63);
+  s.bezierCurveTo(-0.2, 0.45, -0.24, 0.02, 0, -0.11);
+  const g = new THREE.ShapeGeometry(s, 5);
+  g.scale(0.46, 0.46, 0.46);
+  g.computeVertexNormals();
+  return g;
+}
+
+function leafColor(season: Season, rng: () => number) {
+  const c = new THREE.Color();
+  if (season === "autumn") c.setHSL(0.08 + rng() * 0.06, 0.72, 0.42 + rng() * 0.12);
+  else if (season === "winter") c.setHSL(0.27 + rng() * 0.04, 0.14, 0.62 + rng() * 0.08);
+  else c.setHSL(0.26 + rng() * 0.05, 0.48, 0.34 + rng() * 0.12);
+  return c;
+}
+
+export function FallingLeaves({
+  wind,
+  season,
+  surface,
+  treeY,
+  radius = 10.5,
+}: {
+  wind: number;
+  season: Season;
+  surface?: SurfaceProfile;
+  treeY: number;
+  radius?: number;
+}) {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const rngRef = useRef(mulberry(8042));
+  const spawnAcc = useRef(0);
+  const states = useRef<LeafState[]>(
+    Array.from({ length: MAX_LEAVES }, (_, i) => ({
+      pos: new THREE.Vector3(0, -200, 0),
+      vel: new THREE.Vector3(),
+      rot: new THREE.Euler(),
+      spin: new THREE.Vector3(),
+      scale: 0,
+      landed: false,
+      visible: false,
+      landedAt: -1000 - i,
+      phase: i * 1.37,
+    })),
+  );
+
+  const geometry = useMemo(makeLeafGeometry, []);
+  const material = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: "#d48735",
+        roughness: 0.86,
+        metalness: 0,
+        side: THREE.DoubleSide,
+        vertexColors: true,
+      }),
+    [],
+  );
+
+  const colors = useMemo(() => {
+    const rng = mulberry(3301);
+    return Array.from({ length: MAX_LEAVES }, () => leafColor(season, rng));
+  }, [season]);
+
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    colors.forEach((c, i) => mesh.setColorAt(i, c));
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }, [colors]);
+
+  const groundY = (p: THREE.Vector3) => {
+    const limit = surface ? surface.edgeR * 0.96 : radius;
+    const r = Math.hypot(p.x, p.z);
+    if (r > limit) {
+      const k = limit / r;
+      p.x *= k;
+      p.z *= k;
+    }
+    const rr = Math.hypot(p.x, p.z);
+    return surface ? surface.heightAt(rr) + 0.035 : 5.2 - Math.pow(rr / radius, 2) * 1.6;
+  };
+
+  const spawn = (now: number) => {
+    const rng = rngRef.current;
+    const leaves = states.current;
+    let pick = leaves.findIndex((l) => !l.visible);
+    if (pick < 0) {
+      let oldest = Infinity;
+      for (let i = 0; i < leaves.length; i++) {
+        if (leaves[i].landed && leaves[i].landedAt < oldest) {
+          oldest = leaves[i].landedAt;
+          pick = i;
+        }
+      }
+      if (pick < 0 || now - oldest < 18) return;
+    }
+
+    const a = rng() * Math.PI * 2;
+    const r = 2.4 + rng() * 7.6;
+    const l = leaves[pick];
+    l.pos.set(Math.cos(a) * r, treeY + 6.8 + rng() * 6.2, Math.sin(a) * r);
+    l.vel.set((rng() - 0.35) * 0.12 + wind * 0.05, -0.18 - rng() * 0.16, (rng() - 0.5) * 0.12);
+    l.rot.set(rng() * Math.PI, rng() * Math.PI * 2, rng() * Math.PI);
+    l.spin.set((rng() - 0.5) * 2.2, (rng() - 0.5) * 2.8, (rng() - 0.5) * 2.4);
+    l.scale = 0.62 + rng() * 0.55;
+    l.landed = false;
+    l.visible = true;
+    l.landedAt = now;
+    l.phase = rng() * Math.PI * 2;
+  };
+
+  useFrame((state, dt) => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    const t = state.clock.elapsedTime;
+    const d = Math.min(dt, 0.04);
+    const windy = Math.max(0, wind - 2.05);
+    const active = season === "autumn" || windy > 0.15;
+    const spawnRate = active ? Math.min(3.2, (season === "autumn" ? 0.7 : 0) + windy * 1.4) : 0;
+
+    spawnAcc.current += spawnRate * d;
+    while (spawnAcc.current >= 1) {
+      spawnAcc.current -= 1;
+      spawn(t);
+    }
+
+    for (let i = 0; i < MAX_LEAVES; i++) {
+      const l = states.current[i];
+      if (!l.visible) {
+        TMP.position.set(0, -200, 0);
+        TMP.scale.setScalar(0);
+      } else if (l.landed) {
+        TMP.position.copy(l.pos);
+        TMP.rotation.set(-Math.PI / 2, l.rot.y, l.rot.z);
+        TMP.scale.setScalar(l.scale);
+      } else {
+        const flutter = Math.sin(t * 2.1 + l.phase) * 0.12;
+        l.vel.y = Math.max(-1.35, l.vel.y - 0.72 * d); // gravity with terminal velocity
+        l.vel.multiplyScalar(1 - Math.min(0.08, d * 0.55)); // air drag
+        l.vel.x += (wind * 0.08 + flutter - l.vel.x) * d * 0.34;
+        l.vel.z += Math.cos(t * 1.7 + l.phase) * d * 0.045;
+        l.pos.addScaledVector(l.vel, d);
+        l.pos.y += Math.sin(t * 3.0 + l.phase) * d * 0.045;
+        l.rot.x += l.spin.x * d;
+        l.rot.y += l.spin.y * d;
+        l.rot.z += l.spin.z * d;
+
+        const gy = groundY(l.pos);
+        if (l.pos.y <= gy) {
+          l.pos.y = gy;
+          l.landed = true;
+          l.landedAt = t;
+          l.rot.x = -Math.PI / 2;
+          l.spin.set(0, 0, 0);
+        }
+        TMP.position.copy(l.pos);
+        TMP.rotation.copy(l.rot);
+        TMP.scale.setScalar(l.scale);
+      }
+      TMP.updateMatrix();
+      mesh.setMatrixAt(i, TMP.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+  });
+
+  return <instancedMesh ref={meshRef} args={[geometry, material, MAX_LEAVES]} frustumCulled={false} />;
+}

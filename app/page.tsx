@@ -62,14 +62,17 @@ export default function Home() {
 
   useEffect(() => {
     // Poll the repo's star count every minute so new stars grow the tree live.
+    // `no-store` so opening the page always re-checks live with the server
+    // (which serves the cron-warmed cache instantly) instead of a stale browser
+    // copy — the village is verified fresh right on the loading screen.
     const loadStars = () =>
-      fetch("/api/stargazers")
+      fetch("/api/stargazers", { cache: "no-store" })
         .then((r) => r.json())
         .then((d) => {
           if (typeof d.stars === "number") setStars(d.stars);
           setStarsLive(Boolean(d.live));
           setStargazers(Array.isArray(d.stargazers) ? d.stargazers : null);
-          setLastSync(Date.now());
+          setLastSync(typeof d.fetchedAt === "number" ? d.fetchedAt : Date.now());
         })
         .catch(() => {});
 

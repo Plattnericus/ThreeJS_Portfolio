@@ -8,13 +8,17 @@ const GOLDEN = Math.PI * (3 - Math.sqrt(5));
 // pole (founder lowest+innermost, newest on top+outermost). Lower pitch keeps the
 // platforms close enough in height that they link with walkable BRIDGE ramps
 // rather than tall ladders.
-const HELIX_R = 5.0; // base horizontal radius of the platform helix (innermost)
-const SPREAD_R = 1.45; // platforms fan OUTWARD with height → broad, full, NOT a pole
+const HELIX_R = 5.35; // base horizontal radius of the platform helix (innermost)
+// Keep the radius nearly CONSTANT as it climbs so the upper tree reads like the
+// lower tree — a tidy column around the trunk, not thin towers fanning off into
+// space (owner's "build it upward like it is at the bottom"). A gentle √i spread
+// keeps it from looking perfectly cylindrical without breaking the column.
+const SPREAD_R = 0.5; // very mild outward fan with height (was a wide broadening)
 const Y0 = 3.2; // height of the first (founder) platform — lifted clear of the ground
 const PITCH = 1.15; // base vertical rise per platform (low → broad spiral, not a tower)
 const GAP_K = 0.14; // extra rise scaled by deck radii (radial spread does the rest)
 
-const MAX_HELIX_R = 10.5; // keep platforms (incl. their decks) over the floating island
+const MAX_HELIX_R = 7.6; // keep platforms (incl. their decks) in a tidy column over the island
 /** Horizontal radius of the platform at slot `i`. Grows with √i so the tower fans
  *  out as it climbs (wider tree with more stars), then clamps so even a crowded
  *  tower stays on the island rather than hanging off into open sky. */

@@ -144,7 +144,7 @@ function makePuffGeometry(seed: number) {
   const pos = new Float32Array(total);
   let off = 0;
   geos.forEach((g) => {
-    const ng = g.toNonIndexed();
+    const ng = g.index ? g.toNonIndexed() : g;
     const a = ng.getAttribute("position").array as Float32Array;
     pos.set(a, off);
     off += a.length;

@@ -23,6 +23,7 @@ import { Grass } from "./Grass";
 import { GrassClumps } from "./GrassClumps";
 import { Flora } from "./Flora";
 import { Fireflies } from "./Fireflies";
+import { FallingLeaves } from "./FallingLeaves";
 import { Birds } from "./Birds";
 import { Dove } from "./Dove";
 import { Weather } from "./Weather";
@@ -30,6 +31,7 @@ import { SceneRig } from "./SceneRig";
 import { Sky } from "./Sky";
 import { CozyFlyControls } from "./CozyFlyControls";
 import { treeHeight } from "@/lib/growth";
+import { spineAt } from "@/lib/bonsai";
 import type { SceneParams } from "@/lib/weather";
 import type { Stargazer } from "@/lib/stargazers";
 
@@ -164,7 +166,15 @@ function SceneReadySignal({ onReady }: { onReady?: () => void }) {
 
 // Carpets the island top with grass + flowers placed on the REAL surface (a
 // raycast height profile), so coverage reaches the true edge with no bald ground.
-function Plateau({ wind, night }: { wind: number; night: number }) {
+function Plateau({
+  wind,
+  night,
+  season,
+}: {
+  wind: number;
+  night: number;
+  season: SceneParams["season"];
+}) {
   const { scene } = useGLTF("/models/island.glb");
   const surface = useMemo(
     () => sampleIslandSurface(scene, ISLAND_SCALE),
@@ -176,6 +186,7 @@ function Plateau({ wind, night }: { wind: number; night: number }) {
       <GrassClumps wind={wind} count={6} surface={surface} />
       <Flora radius={PLATEAU_R + 2} surface={surface} />
       <Fireflies night={night} baseY={PLATEAU_Y - 0.5} radius={PLATEAU_R + 1} height={11} />
+      <FallingLeaves wind={wind} season={season} surface={surface} treeY={TREE_Y} radius={PLATEAU_R + 2} />
     </>
   );
 }
@@ -208,7 +219,12 @@ export default function Experience({
   // Frame the spiral tower: it grows taller with stars, so aim at its mid-height
   // and let the user pull back far enough to see the whole thing.
   const worldH = treeHeight(stars) * TREE_BOOST;
-  const targetY = TREE_Y + Math.max(4, worldH * 0.5);
+  const trunkTargetLocal = spineAt(Math.max(3.8, treeHeight(stars) * 0.52));
+  const orbitTarget: [number, number, number] = [
+    trunkTargetLocal.x * TREE_BOOST,
+    TREE_Y + trunkTargetLocal.y * TREE_BOOST,
+    trunkTargetLocal.z * TREE_BOOST,
+  ];
   const camMax = THREE.MathUtils.clamp(worldH * 1.6 + 26, 40, 340);
 
   return (
@@ -219,9 +235,9 @@ export default function Experience({
       gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
       onCreated={({ gl }) => {
         gl.shadowMap.enabled = true;
-        gl.shadowMap.type = THREE.PCFSoftShadowMap;
+        gl.shadowMap.type = THREE.PCFShadowMap;
         gl.toneMapping = THREE.ACESFilmicToneMapping;
-        gl.toneMappingExposure = 1.14;
+        gl.toneMappingExposure = 1.07;
         gl.outputColorSpace = THREE.SRGBColorSpace;
       }}
     >
@@ -244,14 +260,14 @@ export default function Experience({
         {/* Supplemental fill so the island always reads well — a soft sky-tinted
             bounce + a gentle cool back-fill opposite the sun, lifted at night. */}
         <hemisphereLight
-          intensity={0.4 + night * 0.3}
-          color="#fbf0d8"
-          groundColor="#33402c"
+          intensity={0.36 + night * 0.42}
+          color="#f8dfb8"
+          groundColor="#3f3326"
         />
         <directionalLight
           position={[-14, 12, -10]}
-          intensity={0.28 + night * 0.2}
-          color="#bcd3ff"
+          intensity={0.2 + night * 0.28}
+          color="#ffd29a"
         />
 
         {/* The sun, sitting where it really is over Sterzing right now. */}
@@ -273,7 +289,7 @@ export default function Experience({
 
         <Float speed={1.1} rotationIntensity={0.1} floatIntensity={0.5}>
           <Island snow={params.snow} scale={ISLAND_SCALE} />
-          <Plateau wind={params.wind} night={night} />
+          <Plateau wind={params.wind} night={night} season={params.season} />
           <group position={[0, TREE_Y, 0]} scale={TREE_BOOST}>
             <Tree
               stars={stars}
@@ -311,7 +327,7 @@ export default function Experience({
       ) : (
         <OrbitControls
           makeDefault
-          target={[0, targetY, 0]}
+          target={orbitTarget}
           enablePan={false}
           minDistance={12}
           maxDistance={camMax}

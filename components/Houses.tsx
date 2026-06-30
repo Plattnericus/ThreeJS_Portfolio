@@ -6,7 +6,7 @@ import { Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import gsap from "gsap";
-import { TIER_BUILDING, TIER_SIZE, Tier, resolveTier } from "@/lib/rarity";
+import { TIER_BUILDING, TIER_SIZE, Tier, deckRadius, resolveTier } from "@/lib/rarity";
 import { MAX_HOUSES } from "@/lib/layout";
 import { sampleBranchAnchors, type Anchor } from "@/lib/branches";
 import { buildLantern, LANTERN_SIZE } from "@/lib/lantern";
@@ -19,7 +19,9 @@ const LANTERN_ROT = 0; // model is already Y-up; no rotation keeps it standing
 // Only the first few houses get a real (forward-rendered) point light at night —
 // every other lantern still glows via baked emissive. Point lights compile into
 // every standard material's shader, so capping them is a big fragment-cost win.
-const LIT_HOUSES = 6;
+const LIT_HOUSES = 7;
+const EXTRA_LANTERNS = 10;
+const EXTRA_LIT_LANTERNS = 4;
 
 function rand(seed: number) {
   const x = Math.sin(seed * 53.17 + 11.3) * 43758.5453;
@@ -303,6 +305,79 @@ function House({
   );
 }
 
+function ExtraDeckLanterns({
+  anchors,
+  active,
+  night,
+  stargazers,
+  lanternScene,
+}: {
+  anchors: Anchor[];
+  active: number;
+  night: number;
+  stargazers?: Stargazer[] | null;
+  lanternScene: THREE.Object3D;
+}) {
+  const refs = useRef<(THREE.Group | null)[]>([]);
+  const items = useMemo(() => {
+    const out: { i: number; angle: number; radius: number; lantern: THREE.Group }[] = [];
+    for (let i = LIT_HOUSES; i < active && out.length < EXTRA_LANTERNS; i++) {
+      if ((i - LIT_HOUSES) % 2 !== 0 && rand(i + 91) > 0.35) continue;
+      const r = deckRadius(i, stargazers);
+      out.push({
+        i,
+        angle: rand(i + 211) * Math.PI * 2,
+        radius: r * (0.72 + rand(i + 33) * 0.18),
+        lantern: buildLantern(lanternScene, LANTERN_SIZE * 0.92, LANTERN_ROT, 0.25 + night * 2.6),
+      });
+    }
+    return out;
+  }, [active, lanternScene, night, stargazers]);
+
+  useFrame((state) => {
+    const t = state.clock.elapsedTime;
+    for (let k = 0; k < items.length; k++) {
+      const g = refs.current[k];
+      if (!g) continue;
+      const item = items[k];
+      const anchor = anchors[item.i];
+      g.position.set(
+        anchor.pos.x + Math.cos(item.angle) * item.radius,
+        anchor.pos.y + 0.42 + Math.sin(t * 0.75 + item.i) * 0.025,
+        anchor.pos.z + Math.sin(item.angle) * item.radius,
+      );
+      g.rotation.y = -item.angle + Math.PI * 0.5;
+      g.rotation.z = Math.sin(t * 0.62 + item.i) * 0.035;
+      g.visible = item.i < active;
+    }
+  });
+
+  const lightsOn = night > 0.04;
+  return (
+    <group>
+      {items.map((item, k) => (
+        <group
+          key={item.i}
+          ref={(g) => {
+            refs.current[k] = g;
+          }}
+        >
+          <primitive object={item.lantern} />
+          {lightsOn && k < EXTRA_LIT_LANTERNS && (
+            <pointLight
+              color="#ffbd73"
+              position={[0, 0.42, 0]}
+              intensity={4.8 * night}
+              distance={3.8}
+              decay={2}
+            />
+          )}
+        </group>
+      ))}
+    </group>
+  );
+}
+
 export function Houses({
   stars,
   highlight = -1,
@@ -359,6 +434,13 @@ export function Houses({
           }}
         />
       ))}
+      <ExtraDeckLanterns
+        anchors={anchors}
+        active={active}
+        night={night}
+        stargazers={stargazers}
+        lanternScene={lanternScene}
+      />
     </group>
   );
 }

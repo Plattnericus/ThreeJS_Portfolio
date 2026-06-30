@@ -13,13 +13,10 @@ import type { Stargazer } from "@/lib/stargazers";
 
 const BRIDGE = "/models/suspension_bridge.glb";
 const LANTERN = "/models/stylized_lantern.glb";
-const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const DECK = 0.35; // platform deck top above the raw branch anchor (matches Houses)
 const WALKWAY_RAISE = 0.24; // extra clearance so bridges visibly sit above branches
 const TRUNK_R = 1.85; // prefer spans that do not cut through the central trunk
-const LADDER_W = 0.85;
-const LADDER_CROSS = 0.46; // built ladder's widest extent (for cross-scaling)
 // Bridges are the DEFAULT: a flat plank bridge is a walkable ramp, so it can also
 // climb. A ladder is ONLY used when the link is essentially "straight up" — the two
 // decks are nearly stacked (tiny horizontal run) with a real height difference, so
@@ -74,34 +71,38 @@ function applyWoodShader(mat: THREE.Material) {
   return mat;
 }
 
-// A simple, sturdy wooden ladder built in code: two rails + rungs, height 1,
-// centred at the origin with its long axis on Y (so it can be stretched to span
-// any climb). No external asset needed.
+// A simple, sturdy wooden ladder built in code: two rails + rungs, built to the
+// EXACT climb length with a FIXED rung pitch — a longer climb just gets MORE rungs
+// at the same spacing, nothing is ever stretched. Centred at origin, long axis Y.
 const LADDER_WOOD = applyWoodShader(
   new THREE.MeshStandardMaterial({
     color: "#8a572f",
     roughness: 0.86,
   }),
 );
-function makeLadder(): THREE.Group {
-  const g = new THREE.Group();
-  const railGeo = new THREE.CylinderGeometry(0.04, 0.04, 1, 6); // y: -0.5..0.5
-  for (const x of [-0.2, 0.2]) {
-    const rail = new THREE.Mesh(railGeo, LADDER_WOOD);
-    rail.position.x = x;
-    rail.castShadow = true;
-    g.add(rail);
+const RAIL_GAP = 0.34; // half-distance between the two rails (rung half-length)
+const RUNG_PITCH = 0.34; // constant vertical spacing between rungs (never scaled)
+function makeLadder(length: number): THREE.BufferGeometry {
+  const L = Math.max(RUNG_PITCH, length);
+  const geos: THREE.BufferGeometry[] = [];
+  // two rails spanning the full length
+  for (const x of [-RAIL_GAP, RAIL_GAP]) {
+    const rail = new THREE.CylinderGeometry(0.045, 0.045, L, 6); // y: -L/2..L/2
+    rail.translate(x, 0, 0);
+    geos.push(rail);
   }
-  const rungGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.46, 6);
-  const N = 7;
-  for (let i = 0; i < N; i++) {
-    const rung = new THREE.Mesh(rungGeo, LADDER_WOOD);
-    rung.rotation.z = Math.PI / 2;
-    rung.position.y = -0.42 + (i / (N - 1)) * 0.84;
-    rung.castShadow = true;
-    g.add(rung);
+  // rungs at a constant pitch → add more as the ladder gets longer (no stretch)
+  const n = Math.max(1, Math.round(L / RUNG_PITCH));
+  const rungLen = RAIL_GAP * 2 + 0.04;
+  for (let i = 0; i <= n; i++) {
+    const rung = new THREE.CylinderGeometry(0.032, 0.032, rungLen, 6);
+    rung.rotateZ(Math.PI / 2);
+    rung.translate(0, -L / 2 + (i / n) * L, 0);
+    geos.push(rung);
   }
-  return g;
+  const merged = mergeGeometries(geos, false);
+  merged.computeVertexNormals();
+  return merged;
 }
 
 // A STRAIGHT, flat plank walkway (no sag) built to the exact span length, so it
@@ -206,8 +207,6 @@ export function Bridges({
   const { scene: lanternScene } = useGLTF(LANTERN);
   const anchors = useMemo(() => sampleBranchAnchors(null, MAX_HOUSES), []);
   const bridge = useMemo(() => extractModel(bridgeScene), [bridgeScene]);
-  // Procedural ladder: unit height, long axis Y. (len/axis/cross drive scaling.)
-  const ladder = { len: 1, axis: Y_AXIS, cross: LADDER_CROSS };
 
   // Deck radius per house — uses the SAME resolved tier as Houses so the bridge
   // ends land exactly on the deck rims.
@@ -265,46 +264,45 @@ export function Bridges({
       };
     };
 
-    // 1) MST backbone so every deck is reachable (too-close decks get skipped and
-    //    the spanning tree reaches the next reachable platform instead).
+    // 1) Degree-capped spanning backbone so every deck is reachable WITHOUT any
+    //    platform becoming a hub. A plain MST can attach many decks to one node
+    //    (degree > cap); here we grow the tree but only ever attach to an in-tree
+    //    node that still has spare capacity (degree < cap), cheapest first.
+    const MAX_DEG = 3;
+    const degree = new Array(active).fill(0);
     const inTree = new Array(active).fill(false);
-    const best = new Array(active).fill(Infinity);
-    const parent = new Array(active).fill(0);
-    const ladderToParent = new Array(active).fill(false);
     inTree[0] = true;
-    for (let j = 1; j < active; j++) {
-      const c = classify(0, j);
-      best[j] = c.cost;
-      ladderToParent[j] = c.ladder;
-    }
     for (let k = 1; k < active; k++) {
       let pick = -1;
-      let pickD = Infinity;
-      for (let j = 0; j < active; j++) {
-        if (!inTree[j] && best[j] < pickD) {
-          pickD = best[j];
-          pick = j;
-        }
-      }
-      if (pick < 0) break;
-      inTree[pick] = true;
-      out.push([parent[pick], pick, ladderToParent[pick]]);
+      let pickParent = -1;
+      let pickCost = Infinity;
+      let pickLadder = false;
       for (let j = 0; j < active; j++) {
         if (inTree[j]) continue;
-        const c = classify(pick, j);
-        if (c.cost < best[j]) {
-          best[j] = c.cost;
-          parent[j] = pick;
-          ladderToParent[j] = c.ladder;
+        for (let p = 0; p < active; p++) {
+          if (!inTree[p] || degree[p] >= MAX_DEG) continue;
+          const c = classify(p, j);
+          if (c.cost < pickCost) {
+            pickCost = c.cost;
+            pick = j;
+            pickParent = p;
+            pickLadder = c.ladder;
+          }
         }
       }
+      if (pick < 0) break; // nothing reachable under the degree cap → stop
+      inTree[pick] = true;
+      degree[pick]++;
+      degree[pickParent]++;
+      out.push([pickParent, pick, pickLadder]);
     }
 
-    // 2) Net: also link each deck to its nearest VALID neighbours (walkable
-    //    bridges/ladders, never through the trunk), so it reads as a web, not a
-    //    single chain. Deduped against the MST.
+    // 2) Net: add a FEW cross-links so it reads as a web, not a single chain —
+    //    every platform still stays capped at 2–3 connections total (reusing the
+    //    `degree` maintained above). Top up to the cap with nearest neighbours.
     const has = new Set(out.map(([i, j]) => (i < j ? `${i}-${j}` : `${j}-${i}`)));
     for (let i = 0; i < active; i++) {
+      if (degree[i] >= MAX_DEG) continue;
       const cands: { j: number; hd: number; ladder: boolean }[] = [];
       for (let j = 0; j < active; j++) {
         if (i === j) continue;
@@ -312,27 +310,47 @@ export function Bridges({
         if (c.valid) cands.push({ j, hd: c.hd, ladder: c.ladder });
       }
       cands.sort((a, b) => a.hd - b.hd);
-      let added = 0;
       for (const cand of cands) {
-        if (added >= 2) break;
+        if (degree[i] >= MAX_DEG) break;
+        if (degree[cand.j] >= MAX_DEG) continue;
         const key = i < cand.j ? `${i}-${cand.j}` : `${cand.j}-${i}`;
-        added++;
         if (has.has(key)) continue;
         has.add(key);
         out.push([i, cand.j, cand.ladder]);
+        degree[i]++;
+        degree[cand.j]++;
       }
     }
     return out;
   }, [active, anchors, deckRadius]);
 
-  // A flat plank bridge geometry sized to each (non-ladder) span, so it's a
-  // straight, walkable deck (no sag). Ladders keep their procedural model.
-  const bridgeGeos = useMemo(
+  // Each span's geometry, built to its EXACT length once (positions are static):
+  // a flat plank bridge for ramps, a fixed-pitch ladder for near-vertical climbs.
+  // Both are rendered at scale 1 → nothing is ever stretched.
+  const spanGeos = useMemo(
     () =>
       edges.map(([i, j, isLadder]) => {
-        if (isLadder) return null;
         const a = anchors[i].pos;
         const b = anchors[j].pos;
+        if (isLadder) {
+          const lo = a.y <= b.y ? i : j;
+          const hi = lo === i ? j : i;
+          const loP = anchors[lo].pos;
+          const hiP = anchors[hi].pos;
+          const dx = hiP.x - loP.x;
+          const dz = hiP.z - loP.z;
+          const hd = Math.hypot(dx, dz) || 1;
+          const ux = dx / hd;
+          const uz = dz / hd;
+          const sep = hd - deckRadius(lo) - deckRadius(hi);
+          const ax = loP.x + ux * deckRadius(lo) * 0.86;
+          const az = loP.z + uz * deckRadius(lo) * 0.86;
+          const ay = loP.y + DECK + WALKWAY_RAISE;
+          const by = hiP.y + DECK + WALKWAY_RAISE;
+          const bx = sep > 0.2 ? hiP.x - ux * deckRadius(hi) * 0.86 : ax + ux * 0.3;
+          const bz = sep > 0.2 ? hiP.z - uz * deckRadius(hi) * 0.86 : az + uz * 0.3;
+          return makeLadder(Math.hypot(bx - ax, by - ay, bz - az));
+        }
         const dh = Math.hypot(b.x - a.x, b.z - a.z) || 1;
         const inset = (deckRadius(i) + deckRadius(j)) * 0.82;
         const ay = a.y + DECK + WALKWAY_RAISE;
@@ -358,7 +376,7 @@ export function Bridges({
       const lg = lanternRefs.current[k];
       if (!g) return;
 
-      if (isLadder && ladder) {
+      if (isLadder) {
         const lo = anchors[i].pos.y <= anchors[j].pos.y ? i : j;
         const hi = lo === i ? j : i;
         const loP = anchors[lo].pos;
@@ -399,9 +417,10 @@ export function Bridges({
         axZ.crossVectors(axX, dir).normalize();
         m4.makeBasis(axX, dir, axZ);
         g.quaternion.setFromRotationMatrix(m4);
-        const L = dist / ladder.len;
-        const C = LADDER_W / ladder.cross;
-        g.scale.set(C, L, C);
+        // Geometry is already built to the exact climb length with fixed rungs —
+        // never scale it (that was the stretched look). Just place & orient.
+        g.scale.set(1, 1, 1);
+        void dist;
         if (lg) {
           lg.visible = true;
           lg.position.set(b3.x, b3.y + 0.05, b3.z);
@@ -459,7 +478,7 @@ export function Bridges({
   if (!bridge) return null;
   return (
     <group>
-      {edges.map(([i, j, isLadder], k) => {
+      {edges.map(([i, j], k) => {
         const lantern = buildLantern(lanternScene, LANTERN_SIZE, 0, 0.2 + night * 2.2);
         return (
           <group key={`${i}-${j}`}>
@@ -468,16 +487,12 @@ export function Bridges({
                 refs.current[k] = g;
               }}
             >
-              {isLadder ? (
-                <primitive object={makeLadder()} />
-              ) : (
-                <mesh
-                  geometry={bridgeGeos[k] ?? undefined}
-                  material={LADDER_WOOD}
-                  castShadow
-                  receiveShadow
-                />
-              )}
+              <mesh
+                geometry={spanGeos[k] ?? undefined}
+                material={LADDER_WOOD}
+                castShadow
+                receiveShadow
+              />
             </group>
             <group
               ref={(g) => {
@@ -485,12 +500,12 @@ export function Bridges({
               }}
             >
               <primitive object={lantern} />
-              {lightsOn && k < 3 && (
+              {lightsOn && k < 5 && (
                 <pointLight
                   color="#ffb765"
                   position={[0, 0.4, 0]}
-                  intensity={4 * night}
-                  distance={3}
+                  intensity={4.6 * night}
+                  distance={3.6}
                   decay={2}
                 />
               )}

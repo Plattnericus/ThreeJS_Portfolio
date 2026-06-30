@@ -29,3 +29,6 @@ next-env.d.ts
 AGENTS.md
 CLAUDE.md
 .claude
+
+# local image/asset backups (originals before edits)
+.backups/

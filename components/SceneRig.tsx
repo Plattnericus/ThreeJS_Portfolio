@@ -69,7 +69,7 @@ export function SceneRig({ params }: { params: SceneParams }) {
         ref={hemi}
         intensity={params.ambient}
         color={params.skyColor}
-        groundColor="#3a3326"
+        groundColor="#4a3828"
       />
       <directionalLight
         ref={dir}

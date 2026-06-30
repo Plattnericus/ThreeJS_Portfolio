@@ -127,7 +127,31 @@ export async function GET(req: Request) {
       fetchReadmeHtml(login),
     ]);
 
-    if (!uRes.ok) return NextResponse.json({ error: "not found" }, { status: 404 });
+    if (!uRes.ok) {
+      // Distinguish a GitHub RATE LIMIT (403/429 with no remaining budget) from a
+      // genuinely missing user (404). Token-free GitHub allows only 60 req/h, so a
+      // busy scene exhausts it and every *valid* profile would otherwise look empty.
+      // On a rate limit we still return what we scraped (pinned come from the public
+      // HTML page, a separate budget) plus a flag so the UI can say "try again"
+      // instead of falsely claiming the user has no data.
+      const remaining = uRes.headers.get("x-ratelimit-remaining");
+      const rateLimited =
+        uRes.status === 429 || (uRes.status === 403 && remaining === "0");
+      if (rateLimited) {
+        return NextResponse.json(
+          {
+            login,
+            rateLimited: true,
+            pinned,
+            pinnedIsFallback: pinned.length === 0,
+            repos: [],
+            readmeHtml,
+          },
+          { status: 200 },
+        );
+      }
+      return NextResponse.json({ error: "not found" }, { status: 404 });
+    }
     const u = await uRes.json();
 
     let repos: Repo[] = [];

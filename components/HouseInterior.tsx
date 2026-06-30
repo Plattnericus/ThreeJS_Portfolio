@@ -140,7 +140,7 @@ export default function HouseInterior({
   const profileUrl = stargazer?.profileUrl ?? `https://github.com/${fallbackLogin}`;
 
   const [user, setUser] = useState<GhUser | null>(null);
-  const [state, setState] = useState<"loading" | "done" | "error">("loading");
+  const [state, setState] = useState<"loading" | "done" | "error" | "ratelimited">("loading");
   const [tab, setTab] = useState<"overview" | "repositories">("overview");
   const overlayRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -177,6 +177,9 @@ export default function HouseInterior({
       );
   }, []);
 
+  // Bump to re-fetch (the "Retry" button after a GitHub rate limit).
+  const [reloadKey, setReloadKey] = useState(0);
+
   useEffect(() => {
     const login = stargazer?.login;
     if (!login) {
@@ -193,13 +196,15 @@ export default function HouseInterior({
         if (!alive) return;
         if (d.error) return setState("error");
         setUser(d);
-        setState("done");
+        // A rate-limited response carries `rateLimited` + whatever could still be
+        // scraped (pinned). Show the profile we have, not a misleading "no data".
+        setState(d.rateLimited ? "ratelimited" : "done");
       })
       .catch(() => alive && setState("error"));
     return () => {
       alive = false;
     };
-  }, [stargazer?.login]);
+  }, [stargazer?.login, reloadKey]);
 
   const displayName = user?.name ?? fallbackLogin;
   const login = user?.login ?? fallbackLogin;
@@ -328,6 +333,20 @@ export default function HouseInterior({
                 <div className="h-4 w-1/2 animate-pulse rounded bg-[#21262d]" />
               </div>
             )}
+            {state === "ratelimited" && (
+              <div className="space-y-2 rounded-md border border-[#3d444d] bg-[#161b22] p-3 text-[13px] text-[#9198a1]">
+                <p>
+                  GitHub’s rate limit was hit, so the live profile couldn’t load right
+                  now. The full profile is on GitHub.
+                </p>
+                <button
+                  onClick={() => setReloadKey((k) => k + 1)}
+                  className="rounded-md border border-[#3d444d] bg-[#21262d] px-3 py-1 text-xs font-medium text-[#e6edf3] transition hover:bg-[#30363d]"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
             {state === "error" && (
               <p className="text-[13px] text-[#9198a1]">
                 No public GitHub data for this house yet.
@@ -377,6 +396,33 @@ export default function HouseInterior({
 
               {state === "error" && (
                 <p className="text-sm text-[#9198a1]">No public GitHub data for this house yet.</p>
+              )}
+
+              {state === "ratelimited" && (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center gap-3 rounded-md border border-[#3d444d] bg-[#161b22] p-4 text-sm text-[#9198a1]">
+                    <span>
+                      GitHub’s rate limit was reached, so this profile couldn’t be loaded
+                      live. Try again in a moment.
+                    </span>
+                    <button
+                      onClick={() => setReloadKey((k) => k + 1)}
+                      className="rounded-md border border-[#3d444d] bg-[#21262d] px-3 py-1 text-xs font-medium text-[#e6edf3] transition hover:bg-[#30363d]"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                  {user && user.pinned.length > 0 && (
+                    <section>
+                      <h3 className="mb-3 text-sm font-medium text-[#e6edf3]">Pinned</h3>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        {user.pinned.map((r) => (
+                          <RepoCard key={r.url} repo={r} />
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                </div>
               )}
 
               {state === "done" && user && tab === "overview" && (
