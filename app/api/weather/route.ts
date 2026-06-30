@@ -65,6 +65,27 @@ function hourlyNum(hourly: Record<string, unknown>, key: string, index: number, 
   return num(arr[index], fallback);
 }
 
+function localDateParts(time: unknown): { year: number; month: number; day: number; hour: number } {
+  if (typeof time === "string") {
+    const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})/.exec(time);
+    if (match) {
+      return {
+        year: Number(match[1]),
+        month: Number(match[2]) - 1,
+        day: Number(match[3]),
+        hour: Number(match[4]),
+      };
+    }
+  }
+  const now = new Date();
+  return {
+    year: now.getFullYear(),
+    month: now.getMonth(),
+    day: now.getDate(),
+    hour: now.getHours(),
+  };
+}
+
 export async function GET() {
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${GOSSENSASS.lat}` +
@@ -81,7 +102,7 @@ export async function GET() {
     const c = data.current ?? {};
     const hourly = data.hourly ?? {};
     const hourIndex = currentHourIndex(hourly.time, c.time);
-    const hour = c.time ? new Date(c.time).getHours() : 12;
+    const date = localDateParts(c.time);
 
     return NextResponse.json({
       live: true,
@@ -102,10 +123,14 @@ export async function GET() {
       cloudMid: pct(hourlyNum(hourly, "cloud_cover_mid", hourIndex, 30), 0.3),
       cloudHigh: pct(hourlyNum(hourly, "cloud_cover_high", hourIndex, 20), 0.2),
       visibilityM: hourlyNum(hourly, "visibility", hourIndex, 40000),
-      hour,
+      hour: date.hour,
+      day: date.day,
+      month: date.month,
+      year: date.year,
       sky: skyFromCode(num(c.weather_code, 0)),
     });
   } catch {
+    const date = localDateParts(null);
     // Fallback so the scene still has sensible mountain weather offline.
     return NextResponse.json({
       live: false,
@@ -126,7 +151,10 @@ export async function GET() {
       cloudMid: 0.35,
       cloudHigh: 0.25,
       visibilityM: 40000,
-      hour: new Date().getHours(),
+      hour: date.hour,
+      day: date.day,
+      month: date.month,
+      year: date.year,
       sky: "clouds",
     });
   }

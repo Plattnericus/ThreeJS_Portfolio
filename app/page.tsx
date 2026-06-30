@@ -113,9 +113,7 @@ export default function Home() {
 
   useEffect(() => {
     // Refresh stargazers every 5 minutes so new stars grow the tree live.
-    // `no-store` so opening the page always re-checks live with the server
-    // (which serves the cron-warmed cache instantly) instead of a stale browser
-    // copy — the village is verified fresh right on the loading screen.
+    // `no-store` keeps the browser from reusing an old response on startup.
     const loadStars = () =>
       fetch("/api/stargazers", { cache: "no-store" })
         .then((r) => r.json())
@@ -146,18 +144,24 @@ export default function Home() {
 
     loadStars();
     loadWeather();
-    // Match the server cache window: refresh the live village every 5 minutes.
-    const starId = DEV_CONTROLS ? null : setInterval(loadStars, STARGAZER_REFRESH_MS);
+    // Refresh the live village every 5 minutes while the site is open.
+    const starId = setInterval(loadStars, STARGAZER_REFRESH_MS);
     const weatherId = setInterval(loadWeather, 10 * 60 * 1000);
     return () => {
-      if (starId) clearInterval(starId);
+      clearInterval(starId);
       clearInterval(weatherId);
     };
   }, []);
 
   const weather: Weather | null =
     mode === "manual"
-      ? manualWeather(date.hour, Math.min(11, Math.max(0, date.month - 1)), manualSky)
+      ? manualWeather(
+          date.hour,
+          Math.min(11, Math.max(0, date.month - 1)),
+          manualSky,
+          date.year,
+          date.day,
+        )
       : liveWeather;
 
   const params = useMemo(

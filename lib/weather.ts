@@ -34,6 +34,8 @@ export type Weather = {
   visibilityM: number;
   hour: number; // 0..24 local
   month?: number; // 0..11 (drives season); omitted = use today
+  day?: number; // 1..31
+  year?: number;
   sky: Sky;
   live: boolean;
 };
@@ -95,6 +97,14 @@ export type SceneParams = {
   snow: number; // 0..1 accumulation on surfaces
   cloud: number; // 0..1 total cover
   clouds: CloudSceneParams;
+  starsIntensity: number; // 0..1, suppressed by daylight/clouds/fog/precip
+  moon: {
+    pos: [number, number, number];
+    phase: number; // 0=new, 0.5=full, 1=new
+    illumination: number; // 0..1
+    visible: number; // 0..1
+    size: number;
+  };
   storm: boolean; // thunderstorm -> lightning
 };
 
@@ -149,6 +159,54 @@ function sunFromHour(hour: number): { pos: [number, number, number]; day: number
   return { pos: [az * 30, 6 + elev * 28, 14], day };
 }
 
+function dateParts(w: Weather): { year: number; month: number; day: number } {
+  const now = new Date();
+  return {
+    year: Math.trunc(finite(w.year, now.getFullYear())),
+    month: Math.trunc(finite(w.month, now.getMonth())),
+    day: Math.trunc(finite(w.day, now.getDate())),
+  };
+}
+
+function moonPhase(year: number, month: number, day: number): number {
+  // Astronomical constants: known new moon epoch + mean synodic month.
+  const synodicMonth = 29.530588853;
+  const newMoonEpoch = Date.UTC(2000, 0, 6, 18, 14);
+  const localNoon = Date.UTC(year, month, day, 12, 0);
+  const days = (localNoon - newMoonEpoch) / 86400000;
+  return ((days / synodicMonth) % 1 + 1) % 1;
+}
+
+function moonFromDateAndHour(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  cloudShadow: number,
+  fog: number,
+  rainMood: number,
+): SceneParams["moon"] {
+  const phase = moonPhase(year, month, day);
+  const illumination = clamp((1 - Math.cos(phase * Math.PI * 2)) * 0.5, 0, 1);
+  // Approximation: new moon tracks the sun, full moon transits at midnight.
+  const transitHour = (12 + phase * 24) % 24;
+  const delta = ((((hour - transitHour + 36) % 24) - 12) / 12);
+  const aboveHorizon = Math.abs(delta) <= 1 ? Math.cos(delta * Math.PI * 0.5) : 0;
+  const x = delta * 42;
+  const y = 6 + aboveHorizon * 15;
+  const z = -82 + Math.sin(phase * Math.PI * 2) * 12;
+  const weatherVisibility = clamp(1 - cloudShadow * 0.72 - fog * 0.85 - rainMood * 0.7, 0, 1);
+  const visible = clamp(aboveHorizon * weatherVisibility * (0.18 + illumination * 0.82), 0, 1);
+
+  return {
+    pos: [x, y, z],
+    phase,
+    illumination,
+    visible,
+    size: lerp(5.2, 7.0, illumination),
+  };
+}
+
 function cloudLayer(
   coverage: number,
   height: number,
@@ -173,6 +231,7 @@ function cloudLayer(
 /** Build realistic scene params from a weather reading. */
 export function sceneFromWeather(w: Weather): SceneParams {
   const { pos, day } = sunFromHour(w.hour);
+  const parts = dateParts(w);
   const humidity = finite(w.humidity, 55);
   const visibilityM = Math.max(100, finite(w.visibilityM, 40000));
   const totalCloud = clamp(finite(w.cloud, 0.2), 0, 1);
@@ -227,6 +286,13 @@ export function sceneFromWeather(w: Weather): SceneParams {
   const cloudShadow = clamp(totalCloud * 0.58 + lowCloud * 0.22 + fog * 0.35 + rainMood * 0.28, 0, 0.98);
   const sunIntensity = lerp(0.12, 2.05, day) * lerp(1, 0.36, cloudShadow) * lerp(1, 0.68, rainMood);
   const sunColor = day < 0.25 ? "#ffb27a" : cloudShadow > 0.62 ? "#d4d8dc" : "#fff1d4";
+  const night = clamp(1 - THREE.MathUtils.smoothstep(day, 0.02, 0.28), 0, 1);
+  const starsIntensity = clamp(
+    night * (1 - cloudShadow * 0.92) * (1 - fog * 0.9) * (1 - rainMood * 0.82),
+    0,
+    1,
+  );
+  const moon = moonFromDateAndHour(parts.year, parts.month, parts.day, w.hour, cloudShadow, fog, rainMood);
 
   const fogNear = lerp(55, 13, fog);
   const fogFar = lerp(135, 42, fog);
@@ -264,13 +330,16 @@ export function sceneFromWeather(w: Weather): SceneParams {
       baseColor: "#" + cloudBase.getHexString(),
       shadowColor: "#" + cloudShade.getHexString(),
     },
+    starsIntensity,
+    moon,
     storm: w.sky === "storm",
   };
 }
 
 // Manual presets for the settings menu. These are demo fixtures, but they keep
 // realistic ranges and the same shape as live Open-Meteo readings.
-export function manualWeather(hour: number, month: number, sky: Sky): Weather {
+export function manualWeather(hour: number, month: number, sky: Sky, year?: number, day?: number): Weather {
+  const now = new Date();
   const tempC = sky === "snow" ? -3 : sky === "clear" ? 22 : 12;
   const windKmh = sky === "storm" ? 38 : sky === "clouds" ? 16 : sky === "fog" ? 3 : 8;
   const gustKmh = sky === "storm" ? 58 : windKmh + 8;
@@ -301,6 +370,8 @@ export function manualWeather(hour: number, month: number, sky: Sky): Weather {
     visibilityM: sky === "fog" ? 2200 : sky === "snow" ? 9000 : 38000,
     hour,
     month,
+    day: day ?? now.getDate(),
+    year: year ?? now.getFullYear(),
     sky,
     live: false,
   };
@@ -326,6 +397,9 @@ export function weatherFromApiPayload(payload: Record<string, unknown>): Weather
     cloudHigh: clamp(finite(payload.cloudHigh as number | undefined, 0.2), 0, 1),
     visibilityM: finite(payload.visibilityM as number | undefined, 40000),
     hour: finite(payload.hour as number | undefined, 12),
+    month: finite(payload.month as number | undefined, new Date().getMonth()),
+    day: finite(payload.day as number | undefined, new Date().getDate()),
+    year: finite(payload.year as number | undefined, new Date().getFullYear()),
     sky: (typeof payload.sky === "string" ? payload.sky : "clear") as Sky,
     live: Boolean(payload.live),
   };

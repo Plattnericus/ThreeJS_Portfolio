@@ -26,6 +26,7 @@ import { Dove } from "./Dove";
 import { Weather } from "./Weather";
 import { SceneRig } from "./SceneRig";
 import { Sky } from "./Sky";
+import { NightSky } from "./NightSky";
 import { CozyFlyControls } from "./CozyFlyControls";
 import { treeHeight } from "@/lib/growth";
 import { spineAt } from "@/lib/bonsai";
@@ -470,6 +471,7 @@ export default function Experience({
         <SceneReadySignal onReady={onReady} />
         <SceneRig params={params} shadowsActive={!performanceMoving} />
         <Sky params={params} />
+        <NightSky params={params} quality={graphicsQuality} />
 
         {/* Soft fill lights keep the island readable. */}
         <hemisphereLight

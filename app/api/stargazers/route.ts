@@ -5,15 +5,9 @@ import { tierFromProfile } from "@/lib/rarity";
 const REPO = process.env.GITHUB_REPO ?? "Plattnericus/ThreeJS_Portfolio";
 const ENRICH = 30; // how many stargazers to enrich with a profile fetch
 
-// Freshness is driven entirely by the tagged Data Cache below (GitHub fetches
-// keyed with `tags: [STAR_TAG]`, revalidated every 5 min). The route itself runs
-// on every request so visitors always see the latest *cached* result instantly —
-// and a Vercel Cron (`/api/cron/stargazers`) refreshes that cache in the
-// background even when nobody has the site open.
+// Visitors drive freshness: the client calls this route on page load and then
+// every 5 minutes. No cron job is required.
 export const dynamic = "force-dynamic";
-
-export const STAR_TAG = "stargazers";
-const STAR_REVALIDATE = 300; // refresh the GitHub data at most every 5 min (enrichment is call-heavy)
 
 function ghHeaders(accept = "application/vnd.github+json") {
   const h: Record<string, string> = {
@@ -25,16 +19,30 @@ function ghHeaders(accept = "application/vnd.github+json") {
   return h;
 }
 
+function json(data: unknown) {
+  return NextResponse.json(data, {
+    headers: {
+      "Cache-Control": "no-store, max-age=0",
+    },
+  });
+}
+
 export async function GET() {
   try {
     // 1) repo info → star count + existence
     const repoRes = await fetch(`https://api.github.com/repos/${REPO}`, {
       headers: ghHeaders(),
-      next: { revalidate: STAR_REVALIDATE, tags: [STAR_TAG] },
+      cache: "no-store",
     });
     if (!repoRes.ok) {
       const demo = Number(process.env.DEMO_STARS ?? 0);
-      return NextResponse.json({ repo: REPO, stars: demo, live: false, stargazers: null });
+      return json({
+        repo: REPO,
+        stars: demo,
+        live: false,
+        stargazers: null,
+        fetchedAt: Date.now(),
+      });
     }
     const repo = await repoRes.json();
     const stars: number = repo.stargazers_count ?? 0;
@@ -42,7 +50,10 @@ export async function GET() {
     // 2) stargazers (login + avatar), earliest first.
     const sgRes = await fetch(
       `https://api.github.com/repos/${REPO}/stargazers?per_page=40`,
-      { headers: ghHeaders("application/vnd.github.star+json"), next: { revalidate: STAR_REVALIDATE, tags: [STAR_TAG] } },
+      {
+        headers: ghHeaders("application/vnd.github.star+json"),
+        cache: "no-store",
+      },
     );
     let stargazers: Stargazer[] | null = null;
     if (sgRes.ok) {
@@ -62,7 +73,7 @@ export async function GET() {
     try {
       const cRes = await fetch(
         `https://api.github.com/repos/${REPO}/contributors?per_page=100`,
-        { headers: ghHeaders(), next: { revalidate: STAR_REVALIDATE, tags: [STAR_TAG] } },
+        { headers: ghHeaders(), cache: "no-store" },
       );
       if (cRes.ok) {
         const list = await cRes.json();
@@ -82,7 +93,7 @@ export async function GET() {
           try {
             const uRes = await fetch(`https://api.github.com/users/${sg.login}`, {
               headers: ghHeaders(),
-              next: { revalidate: STAR_REVALIDATE, tags: [STAR_TAG] },
+              cache: "no-store",
             });
             const u = uRes.ok ? await uRes.json() : {};
             const commits = commitsByLogin.get(sg.login.toLowerCase()) ?? 0;
@@ -107,9 +118,15 @@ export async function GET() {
       );
     }
 
-    return NextResponse.json({ repo: REPO, stars, live: true, stargazers, fetchedAt: Date.now() });
+    return json({ repo: REPO, stars, live: true, stargazers, fetchedAt: Date.now() });
   } catch {
     const demo = Number(process.env.DEMO_STARS ?? 0);
-    return NextResponse.json({ repo: REPO, stars: demo, live: false, stargazers: null });
+    return json({
+      repo: REPO,
+      stars: demo,
+      live: false,
+      stargazers: null,
+      fetchedAt: Date.now(),
+    });
   }
 }
