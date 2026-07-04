@@ -40,10 +40,15 @@ export type QualityProfile = {
   // Shadows
   shadowMapSize: number;
   shadowType: "pcf" | "pcfsoft";
+  leafShadows: "proxy" | "real"; // crown shadow: cheap ellipsoid vs real alpha-tested leaves
+  canopySelfShadow: boolean; // canopy receives its own dappled shadows (extreme)
   // Vegetation
   grassBlades: number;
   grassTufts: number;
   sprigDensity: number; // canopy leaf-sprig multiplier
+  canopyBudgetScale: number; // scales twig/shell budgets — density stays size-stable
+  leafAtlasSize: number; // procedural leaf-card atlas resolution
+  barkTexSize: number; // procedural bark texture resolution
   bushes: number;
   flowers: number;
   // Sky
@@ -76,9 +81,14 @@ export const QUALITY_PROFILES: Record<ResolvedGraphicsQuality, QualityProfile> =
     cloudMaxSteps: 12,
     shadowMapSize: 512,
     shadowType: "pcf",
+    leafShadows: "proxy",
+    canopySelfShadow: false,
     grassBlades: 12000,
     grassTufts: 0,
-    sprigDensity: 0.85,
+    sprigDensity: 1.0,
+    canopyBudgetScale: 0.85,
+    leafAtlasSize: 512,
+    barkTexSize: 512,
     bushes: 70,
     flowers: 160,
     stars: 260,
@@ -104,9 +114,14 @@ export const QUALITY_PROFILES: Record<ResolvedGraphicsQuality, QualityProfile> =
     cloudMaxSteps: 15,
     shadowMapSize: 1024,
     shadowType: "pcf",
+    leafShadows: "proxy",
+    canopySelfShadow: false,
     grassBlades: 20000,
     grassTufts: 1,
-    sprigDensity: 1.1,
+    sprigDensity: 1.3,
+    canopyBudgetScale: 1.0,
+    leafAtlasSize: 512,
+    barkTexSize: 512,
     bushes: 100,
     flowers: 240,
     stars: 560,
@@ -132,9 +147,14 @@ export const QUALITY_PROFILES: Record<ResolvedGraphicsQuality, QualityProfile> =
     cloudMaxSteps: 18,
     shadowMapSize: 2048,
     shadowType: "pcfsoft",
+    leafShadows: "real",
+    canopySelfShadow: false,
     grassBlades: 26000,
     grassTufts: 1,
-    sprigDensity: 1.35,
+    sprigDensity: 1.6,
+    canopyBudgetScale: 1.2,
+    leafAtlasSize: 1024,
+    barkTexSize: 1024,
     bushes: 130,
     flowers: 320,
     stars: 900,
@@ -160,9 +180,14 @@ export const QUALITY_PROFILES: Record<ResolvedGraphicsQuality, QualityProfile> =
     cloudMaxSteps: 26,
     shadowMapSize: 4096,
     shadowType: "pcfsoft",
+    leafShadows: "real",
+    canopySelfShadow: true,
     grassBlades: 34000,
     grassTufts: 1,
-    sprigDensity: 1.65,
+    sprigDensity: 2.0,
+    canopyBudgetScale: 1.45,
+    leafAtlasSize: 1024,
+    barkTexSize: 1024,
     bushes: 170,
     flowers: 420,
     stars: 1400,

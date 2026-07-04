@@ -8,15 +8,23 @@ import { useQualityProfile } from "@/lib/quality";
 
 // Owns background, fog and lights, and eases every value toward the target
 // SceneParams so weather/time changes fade smoothly instead of snapping.
+// fogScale pushes the fog band out as the tree grows: with many stars the
+// camera orbits much farther away, and fixed fog distances would wash the
+// whole scene out white.
 export function SceneRig({
   params,
   shadowsActive = true,
+  fogScale = 1,
 }: {
   params: SceneParams;
   shadowsActive?: boolean;
+  fogScale?: number;
 }) {
   const { gl, scene } = useThree();
   const quality = useQualityProfile();
+  // The shadow frustum must wrap the grown crown too, but growing it costs
+  // shadow-map texel density — cap it below the fog reach.
+  const shadowScale = Math.min(fogScale, 2);
   const hemi = useRef<THREE.HemisphereLight>(null);
   const dir = useRef<THREE.DirectionalLight>(null);
   const lastShadowUpdate = useRef(-1);
@@ -51,8 +59,8 @@ export function SceneRig({
     const fog = scene.fog as THREE.Fog;
     c.fog.lerp(new THREE.Color(params.fogColor), k);
     fog.color.copy(c.fog);
-    c.fogNear += (params.fogNear - c.fogNear) * k;
-    c.fogFar += (params.fogFar - c.fogFar) * k;
+    c.fogNear += (params.fogNear * fogScale - c.fogNear) * k;
+    c.fogFar += (params.fogFar * fogScale - c.fogFar) * k;
     fog.near = c.fogNear;
     fog.far = c.fogFar;
 
@@ -77,9 +85,13 @@ export function SceneRig({
     }
 
     gl.shadowMap.autoUpdate = false;
+    // With real leaf shadows a storm should visibly move the dapples, so the
+    // refresh tightens under strong wind; calm scenes keep the cheap cadence.
+    const shadowInterval =
+      quality.leafShadows === "real" && params.wind > 1.2 ? 0.22 : 0.45;
     if (
       shadowsActive &&
-      state.clock.elapsedTime - lastShadowUpdate.current > 0.45
+      state.clock.elapsedTime - lastShadowUpdate.current > shadowInterval
     ) {
       gl.shadowMap.needsUpdate = true;
       lastShadowUpdate.current = state.clock.elapsedTime;
@@ -102,14 +114,14 @@ export function SceneRig({
         castShadow
         shadow-mapSize={[quality.shadowMapSize, quality.shadowMapSize]}
         shadow-camera-near={1}
-        shadow-camera-far={70}
-        shadow-camera-left={-18}
-        shadow-camera-right={18}
-        shadow-camera-top={30}
-        shadow-camera-bottom={-16}
+        shadow-camera-far={70 * shadowScale}
+        shadow-camera-left={-18 * shadowScale}
+        shadow-camera-right={18 * shadowScale}
+        shadow-camera-top={30 * shadowScale}
+        shadow-camera-bottom={-16 * shadowScale}
         shadow-radius={7}
-        shadow-bias={-0.00035}
-        shadow-normalBias={0.035}
+        shadow-bias={quality.leafShadows === "real" ? -0.0005 : -0.00035}
+        shadow-normalBias={quality.leafShadows === "real" ? 0.05 : 0.035}
         shadow-intensity={0.94}
       />
     </>

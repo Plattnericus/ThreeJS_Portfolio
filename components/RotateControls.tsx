@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { cameraBus } from "@/lib/cameraBus";
+import { useCoarsePointer } from "@/lib/useCoarsePointer";
 import { WOOD } from "./TrunkRings";
 
 function isTextInputTarget(target: EventTarget | null): boolean {
@@ -63,6 +64,7 @@ function Keycap({
  * also buttons: holding one drives the camera exactly like the key.
  */
 export default function RotateControls({ fly }: { fly: boolean }) {
+  const coarse = useCoarsePointer();
   const [held, setHeld] = useState<Record<KeyId, boolean>>({
     up: false,
     down: false,
@@ -144,7 +146,9 @@ export default function RotateControls({ fly }: { fly: boolean }) {
     };
   }, [fly]);
 
-  if (fly) return null;
+  // Touch devices orbit/pinch/pan natively through OrbitControls, so the
+  // keycap legend (arrow keys / Shift / Esc) is desktop-only noise there.
+  if (fly || coarse) return null;
 
   const hold = (axis: "rotate" | "tilt", dir: -1 | 1, key: KeyId) => ({
     onPointerDown: (e: React.PointerEvent) => {

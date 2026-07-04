@@ -73,7 +73,7 @@ export default function Clock({
   }, [sunrise, sunset]);
 
   return (
-    <div className="anim-slide-right absolute right-5 top-5 z-30 flex items-start gap-2.5">
+    <div className="anim-slide-right absolute right-[calc(1.25rem+env(safe-area-inset-right))] top-[calc(1.25rem+env(safe-area-inset-top))] z-30 flex items-start gap-2.5">
       {(times.rise || times.set) && (
         <div
           className="mt-2 hidden flex-col items-end gap-0.5 text-[10px] font-medium tabular-nums sm:flex"
@@ -86,7 +86,7 @@ export default function Clock({
       <button
         onClick={onOpenMenu}
         aria-label={t("a11y.menu")}
-        className="clock-btn relative h-[78px] w-[78px] drop-shadow-[0_6px_14px_rgba(0,0,0,0.45)] transition hover:scale-[1.04] active:scale-95"
+        className="clock-btn relative h-[62px] w-[62px] drop-shadow-[0_6px_14px_rgba(0,0,0,0.45)] transition hover:scale-[1.04] active:scale-95 sm:h-[78px] sm:w-[78px]"
       >
         <TrunkRings size={78} seed={4211} rings={6} className="absolute inset-0 h-full w-full" />
         <svg viewBox="0 0 78 78" className="absolute inset-0 h-full w-full" aria-hidden>

@@ -15,6 +15,9 @@ const nunito = Nunito({
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  // Draw under the notch/rounded corners so the 3D scene is truly fullscreen;
+  // the HUD keeps clear of the cutouts via env(safe-area-inset-*).
+  viewportFit: "cover",
   themeColor: [
     { media: "(prefers-color-scheme: dark)", color: "#0b1320" },
     { media: "(prefers-color-scheme: light)", color: "#3a2712" },
@@ -55,6 +58,7 @@ export async function generateMetadata(): Promise<Metadata> {
     creator: name,
     publisher: name,
     alternates: { canonical: "/" },
+    formatDetection: { telephone: false, email: false, address: false },
     robots: {
       index: true,
       follow: true,
@@ -67,16 +71,15 @@ export async function generateMetadata(): Promise<Metadata> {
       siteName: `${name} — Portfolio`,
       title,
       description,
-      images: owner?.avatarUrl
-        ? [{ url: owner.avatarUrl, width: 460, height: 460, alt: name }]
-        : undefined,
+      locale: "en_US",
+      alternateLocale: ["de_DE", "it_IT"],
+      // The dynamic app/opengraph-image.tsx card is picked up automatically.
     },
     twitter: {
       card: "summary_large_image",
       title,
       description,
       creator: owner?.twitter ? `@${owner.twitter}` : undefined,
-      images: owner?.avatarUrl ? [owner.avatarUrl] : undefined,
     },
     category: "technology",
   };
@@ -101,6 +104,7 @@ export default async function RootLayout({
     description:
       "A living GitHub Star Tree: every stargazer becomes a house on a floating island with real-time Alpine weather, a real sun and moon, and seasons.",
     inLanguage: ["en", "de", "it"],
+    image: `${base}/opengraph-image`,
     author: { "@type": "Person", name: owner?.name ?? login },
   };
   const jsonLd = {
@@ -112,6 +116,7 @@ export default async function RootLayout({
     image: owner?.avatarUrl,
     description: owner?.bio ?? undefined,
     jobTitle: "Software Developer",
+    knowsAbout: ["Three.js", "React", "WebGL", "TypeScript", "Next.js", "Shaders"],
     worksFor: owner?.company ? { "@type": "Organization", name: owner.company } : undefined,
     address: owner?.location
       ? { "@type": "PostalAddress", addressLocality: owner.location }
@@ -125,6 +130,11 @@ export default async function RootLayout({
 
   return (
     <html lang="en" className={nunito.variable}>
+      <head>
+        {/* Stargazer avatars are fetched client-side at runtime. */}
+        <link rel="preconnect" href="https://avatars.githubusercontent.com" crossOrigin="" />
+        <link rel="dns-prefetch" href="https://avatars.githubusercontent.com" />
+      </head>
       <body className="font-sans">
         {children}
         <script

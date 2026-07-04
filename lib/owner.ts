@@ -53,3 +53,26 @@ export async function fetchOwner(): Promise<Owner | null> {
     return null;
   }
 }
+
+// The tracked repo's star count, for the social share card. Cached for an hour
+// and best-effort — the OG image renders fine without it.
+export async function fetchRepoStars(): Promise<number | null> {
+  const repo = process.env.GITHUB_REPO ?? "Plattnericus/ThreeJS_Portfolio";
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "star-tree",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}`, {
+      headers,
+      next: { revalidate: 3600 },
+    });
+    if (!res.ok) return null;
+    const r = await res.json();
+    return typeof r.stargazers_count === "number" ? r.stargazers_count : null;
+  } catch {
+    return null;
+  }
+}

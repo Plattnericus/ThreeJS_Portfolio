@@ -234,7 +234,7 @@ export default function HouseInterior({
     >
       <div
         ref={panelRef}
-        className="relative flex h-[80vh] max-h-[680px] w-full max-w-[900px] flex-col overflow-hidden rounded-2xl border border-[#3d444d] bg-[#0d1117] opacity-0 shadow-2xl shadow-black/60"
+        className="relative flex h-[85dvh] max-h-[680px] w-full max-w-[900px] flex-col overflow-hidden rounded-2xl border border-[#3d444d] bg-[#0d1117] opacity-0 shadow-2xl shadow-black/60"
         onClick={(e) => e.stopPropagation()}
       >
         <button

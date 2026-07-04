@@ -616,7 +616,7 @@ export default function SettingsMenu({
   return (
     // Anchored from the top (NOT re-centered): the header stays put no matter
     // how the content below grows or folds.
-    <div className="fixed inset-0 z-40 flex justify-center overflow-hidden p-3 pt-[6vh] sm:p-6 sm:pt-[7vh]">
+    <div className="fixed inset-0 z-40 flex justify-center overflow-hidden p-3 pt-[max(3vh,env(safe-area-inset-top))] sm:p-6 sm:pt-[7vh]">
       <div
         ref={backdropRef}
         className="absolute inset-0 opacity-0"
@@ -626,7 +626,7 @@ export default function SettingsMenu({
 
       <div
         ref={panelRef}
-        className="relative h-fit max-h-[84vh] w-[min(94vw,470px)] overflow-hidden rounded-[26px] opacity-0"
+        className="relative h-fit max-h-[86dvh] w-[min(94vw,470px)] overflow-hidden rounded-[26px] opacity-0"
         role="dialog"
         aria-modal="true"
         style={{
@@ -651,7 +651,7 @@ export default function SettingsMenu({
           }}
         />
 
-        <div className="relative max-h-[84vh] overflow-y-auto p-4 sm:p-5">
+        <div className="relative max-h-[86dvh] overflow-y-auto p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-5">
           {/* Header */}
           <div data-menu-item className="mb-3 flex items-center justify-between">
             <div>

@@ -55,7 +55,6 @@ const MODEL_ASSETS = [
   "/models/casual_village_buildings_pack.glb",
   "/models/grass.glb",
   "/models/island.glb",
-  "/models/leaves.glb",
   "/models/stylized_lantern.glb",
   "/models/suspension_bridge.glb",
   "/models/tiny_isometric_room.glb",
@@ -341,6 +340,7 @@ function Plateau({
   windVec,
   night,
   season,
+  cloudCover = 0,
   grassBlades,
   grassTufts,
 }: {
@@ -349,6 +349,7 @@ function Plateau({
   windVec: [number, number];
   night: number;
   season: SceneParams["season"];
+  cloudCover?: number;
   grassBlades: number;
   grassTufts: number;
 }) {
@@ -360,8 +361,8 @@ function Plateau({
   );
   return (
     <>
-      <Grass wind={wind} gust={gust} windVec={windVec} count={grassBlades} surface={surface} />
-      <GrassClumps wind={wind} gust={gust} windVec={windVec} count={grassTufts} surface={surface} />
+      <Grass wind={wind} gust={gust} windVec={windVec} cloudCover={cloudCover} count={grassBlades} surface={surface} />
+      <GrassClumps wind={wind} gust={gust} windVec={windVec} cloudCover={cloudCover} count={grassTufts} surface={surface} />
       <Flora radius={PLATEAU_R + 2} surface={surface} />
       <Fireflies
         night={night}
@@ -409,6 +410,8 @@ export default function Experience({
   // Extra degrade knob: scales particle budgets down when the GPU struggles,
   // so PerformanceMonitor has more to give back than resolution alone.
   const [perfBudget, setPerfBudget] = useState(1);
+  // Last-resort degrade: swap real leaf shadows back to the cheap proxy.
+  const [shadowFallback, setShadowFallback] = useState(false);
   const [cameraMoving, setCameraMoving] = useState(false);
   const settleTimer = useRef<number | null>(null);
   const performanceMoving = fly || cameraMoving;
@@ -441,6 +444,9 @@ export default function Experience({
   };
   // Orbit around the current trunk center.
   const worldH = treeHeight(stars) * TREE_BOOST;
+  // A grown tree pushes the camera far out — scale the fog band with it so
+  // the scene never sinks into a white wash at high star counts.
+  const fogScale = THREE.MathUtils.clamp(worldH / 12, 1, 3.2);
   const trunkTargetLocal = spineAt(Math.max(3.8, treeHeight(stars) * 0.52));
   const orbitTarget: [number, number, number] = [
     trunkTargetLocal.x * TREE_BOOST,
@@ -491,10 +497,11 @@ export default function Experience({
             setDpr(quality.minDpr);
             setCloudQuality(quality.movingCloudQuality);
             setPerfBudget(0.45);
+            setShadowFallback(true);
           }}
         />
         <SceneReadySignal onReady={onReady} />
-        <SceneRig params={params} shadowsActive={!performanceMoving} />
+        <SceneRig params={params} shadowsActive={!performanceMoving} fogScale={fogScale} />
         <Sky params={params} />
         <NightSky params={params} />
 
@@ -529,13 +536,14 @@ export default function Experience({
         <Dove interactive={!fly} onFind={onFindDove} />
 
         <Float speed={1.1} rotationIntensity={0.1} floatIntensity={0.5}>
-          <Island snow={params.snow} scale={ISLAND_SCALE} />
+          <Island snow={params.snow} scale={ISLAND_SCALE} cloudCover={params.cloud} windVec={params.windVec} />
           <Plateau
             wind={params.wind}
             gust={params.gust}
             windVec={params.windVec}
             night={night}
             season={params.season}
+            cloudCover={params.cloud}
             grassBlades={quality.grassBlades}
             grassTufts={quality.grassTufts}
           />
@@ -548,6 +556,12 @@ export default function Experience({
               leafColor={params.leafColor}
               snow={params.snow}
               twilight={params.twilight}
+              sunDir={params.sunPos}
+              sunColor={params.sunColor}
+              sunIntensity={params.sunIntensity}
+              wet={params.precip === "rain" ? params.precipIntensity : 0}
+              cloudCover={params.cloud}
+              forceProxyShadows={shadowFallback}
               stargazers={stargazers}
             >
               <Houses
@@ -585,8 +599,16 @@ export default function Experience({
             gaps look with guaranteed occlusion. multisampling=4 keeps MSAA. */}
         {quality.bloom && (
           <EffectComposer multisampling={4}>
-            <Bloom mipmapBlur intensity={0.7} luminanceThreshold={0.75} luminanceSmoothing={0.3} />
-            <HueSaturation saturation={0.18} />
+            {/* Golden hour drives the finish: as the sun crosses the horizon
+                the bloom widens and its threshold drops so light spills
+                through the canopy gaps (the BSL shafts), and the grade warms. */}
+            <Bloom
+              mipmapBlur
+              intensity={0.62 + params.twilight * 0.5}
+              luminanceThreshold={0.75 - params.twilight * 0.18}
+              luminanceSmoothing={0.3}
+            />
+            <HueSaturation saturation={0.18 + params.twilight * 0.12} />
             <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
           </EffectComposer>
         )}

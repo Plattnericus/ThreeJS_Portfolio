@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import type { SurfaceProfile } from "@/lib/surface";
+import { CLOUD_SHADOW_FRAG } from "@/lib/shaderChunks";
 
 // A slim, tapered, slightly curved grass blade (pivot at the base so it sways).
 function bladeGeometry() {
@@ -45,6 +46,7 @@ export function Grass({
   wind = 1,
   gust = 0,
   windVec = [1, 0],
+  cloudCover = 0,
   surface,
 }: {
   count?: number;
@@ -53,6 +55,7 @@ export function Grass({
   wind?: number;
   gust?: number;
   windVec?: [number, number];
+  cloudCover?: number;
   surface?: SurfaceProfile;
 }) {
   const geom = useMemo(bladeGeometry, []);
@@ -61,6 +64,7 @@ export function Grass({
     uTime: { value: 0 },
     uWind: { value: wind },
     uWindDir: { value: new THREE.Vector2(windVec[0], windVec[1]) },
+    uCloudCover: { value: cloudCover },
   });
 
   const material = useMemo(() => {
@@ -73,9 +77,10 @@ export function Grass({
       shader.uniforms.uTime = uniforms.current.uTime;
       shader.uniforms.uWind = uniforms.current.uWind;
       shader.uniforms.uWindDir = uniforms.current.uWindDir;
+      shader.uniforms.uCloudCover = uniforms.current.uCloudCover;
       shader.uniforms.uTip = { value: new THREE.Color("#8fae5c") };
       shader.vertexShader =
-        "uniform float uTime;\nuniform float uWind;\nuniform vec2 uWindDir;\nattribute float aPhase;\nattribute float aSpeed;\nvarying float vH;\n" +
+        "uniform float uTime;\nuniform float uWind;\nuniform vec2 uWindDir;\nattribute float aPhase;\nattribute float aSpeed;\nvarying float vH;\nvarying vec3 vWPos;\n" +
         shader.vertexShader.replace(
           "#include <begin_vertex>",
           `#include <begin_vertex>
@@ -93,14 +98,16 @@ export function Grass({
            float downwind = bend * (0.18 + sin(t) * 0.08) * uWind * gust;
            float lateral = bend * sin(t * 1.7 + aPhase) * 0.055 * uWind;
            transformed.x += dir.x * downwind + side.x * lateral;
-           transformed.z += dir.y * downwind + side.y * lateral;`,
+           transformed.z += dir.y * downwind + side.y * lateral;
+           vWPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;`,
         );
       shader.fragmentShader =
-        "uniform vec3 uTip;\nvarying float vH;\n" +
+        "uniform vec3 uTip;\nuniform float uTime;\nuniform vec2 uWindDir;\nuniform float uCloudCover;\nvarying float vH;\nvarying vec3 vWPos;\n" +
         shader.fragmentShader.replace(
           "#include <color_fragment>",
           `#include <color_fragment>
-           diffuseColor.rgb = mix(diffuseColor.rgb, uTip, smoothstep(0.15, 1.0, vH) * 0.6);`,
+           diffuseColor.rgb = mix(diffuseColor.rgb, uTip, smoothstep(0.15, 1.0, vH) * 0.6);
+           ${CLOUD_SHADOW_FRAG}`,
         );
     };
     return m;
@@ -148,6 +155,7 @@ export function Grass({
     uniforms.current.uTime.value = state.clock.elapsedTime;
     uniforms.current.uWind.value = 0.5 + wind * 0.75 + gust * 0.18;
     uniforms.current.uWindDir.value.set(windVec[0], windVec[1]).normalize();
+    uniforms.current.uCloudCover.value = cloudCover;
   });
 
   return (

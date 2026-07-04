@@ -353,8 +353,13 @@ export function sceneFromWeather(w: Weather): SceneParams {
   const moonDirUnit = new THREE.Vector3(moon.pos[0], moon.pos[1], moon.pos[2]).normalize();
   const horizonDir = new THREE.Vector3(-sunDirUnit.z, 0.05, sunDirUnit.x).normalize();
   const skyDir = new THREE.Vector3(sunDirUnit.x * 0.22, 0.72, sunDirUnit.z * 0.22).normalize();
-  const fogCol = sampleSky(horizonDir, sunDirUnit, moonDirUnit, atmosphere);
+  const fogColRaw = sampleSky(horizonDir, sunDirUnit, moonDirUnit, atmosphere);
   const skyCol = sampleSky(skyDir, sunDirUnit, moonDirUnit, atmosphere);
+  // Golden-hour haze: the low-sun air GLOWS — warm the horizon fog toward the
+  // sun color while the sun crosses the horizon (the "air is lit" look).
+  const fogCol = fogColRaw
+    .clone()
+    .lerp(sunTransmittance(sunDirUnit, atmosphere), twilight * 0.3);
   // Direct sunlight color = atmospheric transmittance (white at noon, amber at
   // the horizon), pulled toward neutral gray under heavy cloud.
   const sunColor = linearToHex(
@@ -364,7 +369,8 @@ export function sceneFromWeather(w: Weather): SceneParams {
     ),
   );
 
-  const fogNear = lerp(55, 13, fog);
+  // Twilight pulls the haze in a touch so the glow reads as depth.
+  const fogNear = lerp(55, 13, fog) * (1 - twilight * 0.12);
   const fogFar = lerp(135, 42, fog);
   // Clouds catch the low sun: golden/pink undersides at dawn and dusk, and
   // they dim toward night instead of staying paper-white.

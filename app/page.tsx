@@ -11,6 +11,7 @@ import {
   type ResolvedGraphicsQuality,
 } from "@/lib/quality";
 import { I18nProvider, useI18n } from "@/lib/i18n";
+import { useCoarsePointer } from "@/lib/useCoarsePointer";
 import SearchBar from "@/components/SearchBar";
 import HouseInterior from "@/components/HouseInterior";
 import MemorialSecret from "@/components/MemorialSecret";
@@ -72,6 +73,7 @@ export default function Page() {
 
 function Home() {
   const { t } = useI18n();
+  const coarse = useCoarsePointer();
   const [stars, setStars] = useState(0);
   const [starsLive, setStarsLive] = useState(false);
   const [stargazers, setStargazers] = useState<Stargazer[] | null>(null);
@@ -337,18 +339,22 @@ function Home() {
           }}
         />
 
-        <button
-          onClick={() => setFly((f) => !f)}
-          className={`anim-rise-x absolute bottom-20 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border px-4 py-2 text-xs backdrop-blur-xl transition active:scale-95 sm:bottom-6 ${
-            fly
-              ? "border-white/25 bg-white/15 text-white"
-              : "border-white/10 bg-white/[0.06] text-white/70 hover:bg-white/10 hover:text-white"
-          }`}
-        >
-          <FlyIcon className="h-3.5 w-3.5" />
-          {fly ? t("fly.exit") : t("fly.enter")}
-        </button>
-        {fly && (
+        {/* Fly mode is pointer-lock + WASD — unusable on touch, so it is
+            desktop-only. */}
+        {!coarse && (
+          <button
+            onClick={() => setFly((f) => !f)}
+            className={`anim-rise-x absolute bottom-[calc(5rem+env(safe-area-inset-bottom))] left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border px-4 py-2 text-xs backdrop-blur-xl transition active:scale-95 sm:bottom-[calc(1.5rem+env(safe-area-inset-bottom))] ${
+              fly
+                ? "border-white/25 bg-white/15 text-white"
+                : "border-white/10 bg-white/[0.06] text-white/70 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            <FlyIcon className="h-3.5 w-3.5" />
+            {fly ? t("fly.exit") : t("fly.enter")}
+          </button>
+        )}
+        {fly && !coarse && (
           <div className="pointer-events-none absolute bottom-32 left-1/2 -translate-x-1/2 text-center text-[11px] text-white/45 sm:bottom-16">
             {t("fly.hint")}
           </div>

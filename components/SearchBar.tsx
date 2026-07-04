@@ -117,7 +117,7 @@ export default function SearchBar({
   return (
     <div
       ref={rootRef}
-      className="anim-rise-x absolute left-4 right-20 top-5 z-30 sm:left-1/2 sm:right-auto sm:-translate-x-1/2"
+      className="anim-rise-x absolute left-4 right-[4.75rem] top-[calc(1.25rem+env(safe-area-inset-top))] z-30 sm:left-1/2 sm:right-auto sm:top-5 sm:-translate-x-1/2"
     >
       <div className="relative w-full sm:w-[min(92vw,380px)]">
         <div className="relative overflow-hidden rounded-full border border-white/12 bg-[#0d1410]/55 shadow-2xl shadow-black/35 backdrop-blur-2xl transition focus-within:border-[#9fd272]/55 focus-within:bg-[#0d1410]/72">
@@ -159,7 +159,7 @@ export default function SearchBar({
               }
             }}
             placeholder={t("search.placeholder")}
-            className="relative h-11 w-full bg-transparent pl-11 pr-4 text-sm font-medium text-white placeholder-white/38 outline-none"
+            className="relative h-11 w-full bg-transparent pl-11 pr-4 text-base font-medium text-white placeholder-white/38 outline-none sm:text-sm"
           />
         </div>
 
@@ -174,7 +174,7 @@ export default function SearchBar({
               ref={glowRef}
               className="pointer-events-none absolute inset-y-0 left-0 w-1/2 -skew-x-12 bg-gradient-to-r from-transparent via-white/14 to-transparent opacity-0"
             />
-            <div className="relative max-h-72 overflow-y-auto p-1.5">
+            <div className="relative max-h-[45dvh] overflow-y-auto p-1.5 sm:max-h-72">
               {results.map((result, i) => {
                 const active = result.index === activeIndex;
                 return (

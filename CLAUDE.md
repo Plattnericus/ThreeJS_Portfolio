@@ -101,12 +101,17 @@ Bucket `rarityScore` into tiers (drop-rate / threshold table to be finalized):
 
 > **IMPLEMENTED.** ALL performance knobs live in `QUALITY_PROFILES` (low/medium/high/**extreme**):
 > DPR ranges, antialias, cloud layers + raymarch steps, shadow map size/type (512→4096, PCFSoft on
-> extreme), grass/canopy density (`sprigDensity`), flora/particle/firefly/falling-leaf counts, ant
-> counts + `antMixerStride` (low tier updates skinned mixers every 2nd frame — biggest CPU win).
-> Components read the active profile via `useQualityProfile()` (React context provided inside the
-> Canvas in `Experience.tsx`) — never hardcode counts in components. Auto-detect never resolves to
-> "extreme" (opt-in only). `PerformanceMonitor` degrades DPR + cloud quality + a particle `budget`
-> passed to `Weather`. The Canvas remounts on tier change (`key={graphicsQuality}`).
+> extreme), grass/canopy density (`sprigDensity` **1.0/1.3/1.6/2.0** + `canopyBudgetScale`
+> 0.85/1.0/1.2/1.45 — scale the crown twig/shell budgets; density is size-STABLE, big trees stay
+> lush), leaf/bark procedural texture sizes (`leafAtlasSize`/`barkTexSize`, 512→1024), canopy shadow
+> mode (`leafShadows` `proxy`|`real` + `canopySelfShadow`), flora/particle/firefly/falling-leaf
+> counts, ant counts + `antMixerStride` (low tier updates skinned mixers every 2nd frame — biggest
+> CPU win). Components read the active profile via `useQualityProfile()` (React context provided
+> inside the Canvas in `Experience.tsx`) — never hardcode counts in components. Auto-detect never
+> resolves to "extreme" (opt-in only). `PerformanceMonitor` degrades DPR + cloud quality + a particle
+> `budget` passed to `Weather` **and, on `onFallback`, swaps real leaf shadows back to the cheap
+> proxy** (`shadowFallback` → `Tree` prop `forceProxyShadows`). The Canvas remounts on tier change
+> (`key={graphicsQuality}`).
 
 ## HUD / Menu (wood theme) — 2026-07
 
@@ -124,6 +129,25 @@ Bucket `rarityScore` into tiers (drop-rate / threshold table to be finalized):
 > level Escape listeners. i18n: `lib/i18n.tsx` (DE/EN/IT dictionaries, typed keys, localStorage
 > `star-tree-locale`, browser-language detect); MemorialSecret stays German by design. Credits are
 > parsed server-side from `CREDITS.md` by `/api/credits` per the contract below.
+>
+> **Mobile (2026-07).** `viewportFit: "cover"` (layout.tsx) + `100dvh` + `env(safe-area-inset-*)`
+> helpers (`.safe-*` in `globals.css`) keep the HUD clear of notches and the shrinking mobile
+> browser chrome. `lib/useCoarsePointer.ts` (`(pointer: coarse)`, SSR-safe) hides the
+> **RotateControls keycap legend and the Fly button** on touch (OrbitControls already handles
+> orbit/pinch/pan; fly is pointer-lock + WASD). SearchBar input is `text-base` on mobile (16px stops
+> the iOS focus-zoom); Clock shrinks to 62px; panels use `dvh` + safe-area padding. Corner elements
+> anchor to `calc(<offset> + env(safe-area-inset-*))`.
+
+## SEO (2026-07)
+
+> **IMPLEMENTED.** Metadata is built from the real GitHub owner in `app/layout.tsx`
+> (`generateMetadata` + Person/WebSite JSON-LD). `app/opengraph-image.tsx` renders a **dynamic
+> 1200×630 wood-themed share card** (name + `@login` + avatar + live star count via
+> `fetchRepoStars`, next/og, revalidate 1h) — replaces the bare avatar; twitter card inherits it.
+> Avoid glyphs that need a downloaded font (e.g. `★`) and give every multi-child `<div>` an explicit
+> `display` (satori requirement). `openGraph.locale`/`alternateLocale` cover de/it; `<html lang>` is
+> synced live by `I18nProvider`; `preconnect` to `avatars.githubusercontent.com` for runtime
+> stargazer avatars. JSON-LD Person carries `knowsAbout`; WebSite carries the OG `image`.
 
 ## Visual QA (2026-07)
 
@@ -393,13 +417,34 @@ changes.
 > pushed toward **realism** per the owner's explicit direction, beyond the strict "low-poly /
 > flat-shaded / no photoreal" rule below: an **uneven procedural trunk** (fluted cross-section, root
 > flare, sawn-off branch stubs with **annual-ring** caps), **mottled/blotchy** procedural bark (not
-> streaky), and a **dense** instanced leaf canopy. Houses & bridges are carved fully clear of leaves.
-> The hard constraint is **≥120fps with many stars**, so: keep the canopy ONE instanced draw call
-> kept **out of the shadow passes** (a cheap invisible ellipsoid casts its shadow), cap real-time
-> point lights (most lanterns glow via **emissive only** — `LIT_HOUSES` in `Houses.tsx`, `k < 3` in
-> `Bridges.tsx`), merge house platform sub-meshes, 2048² sun shadow map, and let drei
-> `PerformanceMonitor` auto-scale DPR (`Experience.tsx`). Tune density via the canopy `N` cap and
-> `nestCount` in `components/Tree.tsx`. Don't "correct" these back to flat low-poly.
+> streaky) with a **moss term on the weather side + base** (`getBarkTextures`, cached per
+> `barkTexSize`), and a **dense** instanced leaf canopy. Houses & bridges are carved fully clear of
+> leaves. The hard constraint is **≥120fps with many stars**, so: keep the canopy ONE instanced draw
+> call (+1 depth pass only when real shadows are on), cap real-time point lights (most lanterns glow
+> via **emissive only** — `LIT_HOUSES` in `Houses.tsx`, `k < 3` in `Bridges.tsx`), merge house
+> platform sub-meshes, **merge all static wood into 3 meshes** (bark / roots / ring-caps in
+> `woodGeos`), 2048² sun shadow map, and let drei `PerformanceMonitor` auto-scale DPR
+> (`Experience.tsx`). Tune density via `sprigDensity` + `canopyBudgetScale` (`lib/quality.ts`);
+> the crown `budget`/`NC`/`NF` are now span-proportional (no hard ceiling) so a tall tree stays
+> lush. Don't "correct" these back to flat low-poly.
+>
+> **Leaf shader v2 (2026-07) — BSL/RDR2 pass.** The canopy is 24 folded quad cards per sprig, each
+> UV-mapped to one tile of a **procedural veined leaf-cluster alpha atlas** (`getLeafAtlas`, cached
+> per `leafAtlasSize`; RGB pre-flooded green so mipmaps don't ring at alpha edges), with **soft
+> volume normals** so the crown shades like a rounded mass, not flat cards. `makeLeafMaterial`
+> (uniform-driven, never recompiles): a **3-octave wind field** (`LEAF_WIND_CHUNK` — a gust FRONT
+> travels across the crown, flutter gated by the gust), **sun-through-leaf translucency** (`uSSS`,
+> swells toward the golden hour), baked per-instance **crown-depth AO** (`aLeaf.x`), **snow dust**
+> on up-facing cards, **wet-rain darkening + gloss** (`uWet`), **drifting cloud shadows**
+> (`CLOUD_SHADOW_FRAG` from `lib/shaderChunks.ts`, shared with Grass/GrassClumps/Island) and a sky
+> **rim**. `uSunColor` comes from `params.sunColor` (= `sunTransmittance`, one atmosphere).
+> **Real dappled leaf shadows** on high/extreme: the instanced canopy `castShadow`s through a
+> `customDepthMaterial` running the SAME wind chunk + `alphaTest` (so shadows sway with the leaves);
+> low/medium keep the cheap invisible-ellipsoid proxy. The **fog band scales with tree height**
+> (`fogScale` in `Experience`→`SceneRig`) so a big tree never washes out white, and the shadow
+> frustum grows with it. Post-processing (`Experience.tsx`) is **twilight-dynamic**: bloom widens /
+> lowers its threshold and the grade warms as the sun crosses the horizon (no god-rays pass — the
+> depth-tested sun disc + bloom already occlude correctly). Don't hand-pick sky/fog values.
 
 The look should feel **deliberate and calm**, not like a default template. Concrete rules so the
 build doesn't drift into visual cliché:

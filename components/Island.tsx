@@ -4,6 +4,7 @@ import { useMemo, useRef } from "react";
 import { useFrame, type ThreeElements } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
+import { CLOUD_SHADOW_FRAG } from "@/lib/shaderChunks";
 
 // GLSL helpers: cheap value noise for surface variation.
 const NOISE = /* glsl */ `
@@ -21,10 +22,18 @@ const NOISE = /* glsl */ `
 // Grass-on-top / rock-on-slopes material. The original textures were missing, so
 // we drive color procedurally from the world-up normal + noise (a poor-man's
 // triplanar) for a believable grassy floating island.
-function grassRockMaterial(snowRef: { current: { value: number } }) {
+function grassRockMaterial(u: {
+  uSnow: { value: number };
+  uTime: { value: number };
+  uWindDir: { value: THREE.Vector2 };
+  uCloudCover: { value: number };
+}) {
   const mat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
   mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uSnow = snowRef.current;
+    shader.uniforms.uSnow = u.uSnow;
+    shader.uniforms.uTime = u.uTime;
+    shader.uniforms.uWindDir = u.uWindDir;
+    shader.uniforms.uCloudCover = u.uCloudCover;
     shader.vertexShader =
       "varying vec3 vWPos;\nvarying vec3 vWNrm;\n" +
       shader.vertexShader
@@ -37,7 +46,7 @@ function grassRockMaterial(snowRef: { current: { value: number } }) {
           "#include <beginnormal_vertex>\n  vWNrm = normalize(mat3(modelMatrix)*objectNormal);",
         );
     shader.fragmentShader =
-      "uniform float uSnow;\nvarying vec3 vWPos;\nvarying vec3 vWNrm;\n" +
+      "uniform float uSnow;\nuniform float uTime;\nuniform vec2 uWindDir;\nuniform float uCloudCover;\nvarying vec3 vWPos;\nvarying vec3 vWNrm;\n" +
       NOISE +
       shader.fragmentShader.replace(
         "#include <color_fragment>",
@@ -56,7 +65,8 @@ function grassRockMaterial(snowRef: { current: { value: number } }) {
         diffuseColor.rgb = mix(rock, grass, g);
         // snow settles on up-facing surfaces
         float snowMask = smoothstep(0.35, 0.75, up + (n-0.5)*0.3) * uSnow;
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.92,0.94,0.98), snowMask);`,
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.92,0.94,0.98), snowMask);
+        ${CLOUD_SHADOW_FRAG}`,
       );
   };
   return mat;
@@ -64,14 +74,25 @@ function grassRockMaterial(snowRef: { current: { value: number } }) {
 
 export function Island({
   snow = 0,
+  cloudCover = 0,
+  windVec = [1, 0],
   ...props
-}: { snow?: number } & ThreeElements["group"]) {
+}: {
+  snow?: number;
+  cloudCover?: number;
+  windVec?: [number, number];
+} & ThreeElements["group"]) {
   const { scene } = useGLTF("/models/island.glb");
-  const snowU = useRef({ value: 0 });
+  const uniforms = useRef({
+    uSnow: { value: 0 },
+    uTime: { value: 0 },
+    uWindDir: { value: new THREE.Vector2(windVec[0], windVec[1]) },
+    uCloudCover: { value: cloudCover },
+  });
 
   const island = useMemo(() => {
     const root = scene.clone(true);
-    const mat = grassRockMaterial(snowU);
+    const mat = grassRockMaterial(uniforms.current);
     root.traverse((obj) => {
       if (!(obj instanceof THREE.Mesh)) return;
       obj.castShadow = false;
@@ -82,8 +103,12 @@ export function Island({
   }, [scene]);
 
   // ease snow coverage so season/weather changes blend smoothly
-  useFrame((_, dt) => {
-    snowU.current.value += (snow - snowU.current.value) * Math.min(1, dt * 1.2);
+  useFrame((state, dt) => {
+    const u = uniforms.current;
+    u.uSnow.value += (snow - u.uSnow.value) * Math.min(1, dt * 1.2);
+    u.uTime.value = state.clock.elapsedTime;
+    u.uWindDir.value.set(windVec[0], windVec[1]).normalize();
+    u.uCloudCover.value = cloudCover;
   });
 
   return <primitive object={island} {...props} />;
