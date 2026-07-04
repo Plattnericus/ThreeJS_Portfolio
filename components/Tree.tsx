@@ -10,6 +10,7 @@ import { animated, useSpring } from "@react-spring/three";
 import { bonsaiNodes, makeTaperedTubeGeometry, spineAt } from "@/lib/bonsai";
 import { treeHeight, trunkBaseRadius, trunkHeight } from "@/lib/growth";
 import { MAX_HOUSES } from "@/lib/layout";
+import { useQualityProfile } from "@/lib/quality";
 import { deckRadius, type Tier } from "@/lib/rarity";
 
 const LEAVES = "/models/leaves.glb";
@@ -329,7 +330,7 @@ function makeLeafMaterial(
     shader.uniforms.uWind = uniforms.uWind;
     shader.uniforms.uWindDir = uniforms.uWindDir;
     shader.vertexShader =
-      "uniform float uTime;\nuniform float uWind;\nuniform vec2 uWindDir;\n" +
+      "uniform float uTime;\nuniform float uWind;\nuniform vec2 uWindDir;\nvarying float vLeafVar;\n" +
       shader.vertexShader.replace(
         "#include <begin_vertex>",
         `#include <begin_vertex>
@@ -338,6 +339,7 @@ function makeLeafMaterial(
         #else
           float ph = position.x * 0.6;
         #endif
+        vLeafVar = fract(sin(ph * 43.758) * 137.31);
         float hf = 0.35 + max(transformed.y, 0.0) * 0.6;
         vec2 dir = normalize(uWindDir);
         vec2 side = vec2(-dir.y, dir.x);
@@ -350,6 +352,17 @@ function makeLeafMaterial(
         transformed.z += dir.y * downwind + side.y * lateral;
         transformed.y += sin(uTime * 1.6 + ph * 1.3) * 0.014 * uWind * hf;
         `,
+      );
+    // Per-sprig color variation: real canopies are never one uniform green —
+    // each clump leans warm-yellow or cool-blue and varies in brightness.
+    shader.fragmentShader =
+      "varying float vLeafVar;\n" +
+      shader.fragmentShader.replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+        vec3 leafWarm = vec3(1.09, 1.03, 0.8);
+        vec3 leafCool = vec3(0.85, 1.0, 1.07);
+        diffuseColor.rgb *= mix(leafCool, leafWarm, vLeafVar) * (0.86 + vLeafVar * 0.26);`,
       );
   };
   return mat;
@@ -456,6 +469,7 @@ function BranchCluster({
   blossomMaterial: THREE.Material;
   blossomLightMaterial: THREE.Material;
 }) {
+  const sprigDensity = useQualityProfile().sprigDensity;
   const items = useMemo(() => {
     const out: {
       pos: [number, number, number];
@@ -464,7 +478,7 @@ function BranchCluster({
       blossom: boolean;
       light: boolean;
     }[] = [];
-    const count = 24 + (node.index % 5) * 3;
+    const count = Math.max(10, Math.round((24 + (node.index % 5) * 3) * sprigDensity));
     for (let i = 0; i < count; i++) {
       const a = node.phase + i * 2.399;
       const r = 0.34 + ((i * 37) % 100) / 100 * 1.05;
@@ -490,7 +504,7 @@ function BranchCluster({
       });
     }
     return out;
-  }, [node]);
+  }, [node, sprigDensity]);
 
   return (
     <group position={node.tip}>
@@ -528,6 +542,7 @@ export function Tree({
   windVec = [1, 0],
   leafColor = "#5aa238",
   snow = 0,
+  twilight = 0,
   stargazers = null,
   children,
   ...props
@@ -538,11 +553,13 @@ export function Tree({
   windVec?: [number, number];
   leafColor?: string;
   snow?: number;
+  twilight?: number;
   stargazers?: { tier?: Tier }[] | null;
 } & ThreeElements["group"]) {
   const swayRef = useRef<THREE.Group>(null);
   const trunkRef = useRef<THREE.Group>(null);
   const branchRefs = useRef<(THREE.Group | null)[]>([]);
+  const sprigDensity = useQualityProfile().sprigDensity;
   const nodes = useMemo(() => bonsaiNodes(MAX_HOUSES), []);
   const active = Math.min(MAX_HOUSES, Math.max(0, Math.floor(stars)));
   const sprigGeo = useMemo(makeLeafSprigGeometry, []);
@@ -576,13 +593,19 @@ export function Tree({
     materials.leaf.color
       .set(leafColor)
       .lerp(new THREE.Color("#ffffff"), Math.min(1, snow * 0.55));
+    // Golden-hour backlight: real foliage glows amber when the low sun shines
+    // through it — a small emissive lift sells it without any shader surgery.
+    materials.leaf.emissive
+      .set(leafColor)
+      .lerp(new THREE.Color("#ffb46b"), Math.min(1, twilight * 0.6));
+    materials.leaf.emissiveIntensity = 0.03 + twilight * 0.22;
     materials.blossom.color
       .set(BLOSSOM)
       .lerp(new THREE.Color("#ffffff"), Math.min(1, snow * 0.35));
     materials.blossomLight.color
       .set(BLOSSOM_LIGHT)
       .lerp(new THREE.Color("#ffffff"), Math.min(1, snow * 0.4));
-  }, [materials, leafColor, snow]);
+  }, [materials, leafColor, snow, twilight]);
 
   // Trunk follows the procedural spine and grows with the tower.
   const trunkH = trunkHeight(stars);
@@ -817,10 +840,12 @@ export function Tree({
     const addLeafBurst = (
       anchor: THREE.Vector3,
       dir: THREE.Vector3,
-      count: number,
+      baseCount: number,
       spread: number,
       twigRadius: number,
     ) => {
+      // Canopy density scales with the graphics tier.
+      const count = Math.max(1, Math.round(baseCount * sprigDensity));
       for (let b = 0; b < count; b++) {
         const side = new THREE.Vector3(
           Math.cos(seed * 0.91 + b * 2.399),
@@ -1014,7 +1039,7 @@ export function Tree({
 
     const branchGeo = branchGeos.length ? mergeGeometries(branchGeos, false) : null;
     return { branchGeo, sprigs };
-  }, [nodes, active, stargazers, stars]);
+  }, [nodes, active, stargazers, stars, sprigDensity]);
 
   useEffect(() => {
     branchRefs.current.forEach((group, i) => {

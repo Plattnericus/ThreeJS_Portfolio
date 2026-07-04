@@ -5,8 +5,8 @@ import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import type { Season } from "@/lib/weather";
 import type { SurfaceProfile } from "@/lib/surface";
+import { useQualityProfile } from "@/lib/quality";
 
-const MAX_LEAVES = 110;
 const TMP = new THREE.Object3D();
 
 type LeafState = {
@@ -68,20 +68,24 @@ export function FallingLeaves({
   radius?: number;
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
+  const MAX_LEAVES = useQualityProfile().fallingLeaves;
   const rngRef = useRef(mulberry(8042));
   const spawnAcc = useRef(0);
-  const states = useRef<LeafState[]>(
-    Array.from({ length: MAX_LEAVES }, (_, i) => ({
-      pos: new THREE.Vector3(0, -200, 0),
-      vel: new THREE.Vector3(),
-      rot: new THREE.Euler(),
-      spin: new THREE.Vector3(),
-      scale: 0,
-      landed: false,
-      visible: false,
-      landedAt: -1000 - i,
-      phase: i * 1.37,
-    })),
+  const states = useMemo<{ current: LeafState[] }>(
+    () => ({
+      current: Array.from({ length: MAX_LEAVES }, (_, i) => ({
+        pos: new THREE.Vector3(0, -200, 0),
+        vel: new THREE.Vector3(),
+        rot: new THREE.Euler(),
+        spin: new THREE.Vector3(),
+        scale: 0,
+        landed: false,
+        visible: false,
+        landedAt: -1000 - i,
+        phase: i * 1.37,
+      })),
+    }),
+    [MAX_LEAVES],
   );
 
   const geometry = useMemo(makeLeafGeometry, []);
@@ -100,7 +104,7 @@ export function FallingLeaves({
   const colors = useMemo(() => {
     const rng = mulberry(3301);
     return Array.from({ length: MAX_LEAVES }, () => leafColor(season, rng));
-  }, [season]);
+  }, [season, MAX_LEAVES]);
 
   useEffect(() => {
     const mesh = meshRef.current;
@@ -217,5 +221,12 @@ export function FallingLeaves({
     mesh.instanceMatrix.needsUpdate = true;
   });
 
-  return <instancedMesh ref={meshRef} args={[geometry, material, MAX_LEAVES]} frustumCulled={false} />;
+  return (
+    <instancedMesh
+      key={MAX_LEAVES}
+      ref={meshRef}
+      args={[geometry, material, MAX_LEAVES]}
+      frustumCulled={false}
+    />
+  );
 }

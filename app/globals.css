@@ -2,8 +2,8 @@
 @config "../tailwind.config.ts";
 
 :root {
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
-    "Inter", system-ui, sans-serif;
+  --font-sans: var(--font-nunito), -apple-system, BlinkMacSystemFont, "SF Pro Display",
+    "SF Pro Text", "Inter", system-ui, sans-serif;
 }
 
 html,

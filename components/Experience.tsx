@@ -9,6 +9,8 @@ import {
   Preload,
   useGLTF,
 } from "@react-three/drei";
+import { Bloom, EffectComposer, HueSaturation, ToneMapping } from "@react-three/postprocessing";
+import { ToneMappingMode } from "postprocessing";
 import * as THREE from "three";
 import { sampleIslandSurface } from "@/lib/surface";
 import { Island } from "./Island";
@@ -32,6 +34,13 @@ import { treeHeight } from "@/lib/growth";
 import { spineAt } from "@/lib/bonsai";
 import type { CloudLayerParams, SceneParams } from "@/lib/weather";
 import type { Stargazer } from "@/lib/stargazers";
+import {
+  QUALITY_PROFILES,
+  QualityContext,
+  useQualityProfile,
+  type ResolvedGraphicsQuality as Quality,
+} from "@/lib/quality";
+import { cameraBus, ROTATE_FAST_MULTIPLIER, ROTATE_SPEED, TILT_SPEED } from "@/lib/cameraBus";
 
 // Shared scene scale for the island and tree.
 const ISLAND_SCALE = 0.8;
@@ -60,52 +69,7 @@ function AssetGate() {
 
 const CLOUD_RANGE = 118;
 
-export type ResolvedGraphicsQuality = "low" | "medium" | "high";
-
-const QUALITY_CONFIG = {
-  low: {
-    minDpr: 0.72,
-    idleDpr: 0.92,
-    maxDpr: 1.05,
-    movingDpr: 0.86,
-    idleCloudQuality: 0.34,
-    movingCloudQuality: 0.08,
-    grassBlades: 12000,
-    grassTufts: 0,
-  },
-  medium: {
-    minDpr: 0.9,
-    idleDpr: 1.28,
-    maxDpr: 1.45,
-    movingDpr: 1.1,
-    idleCloudQuality: 0.54,
-    movingCloudQuality: 0.12,
-    grassBlades: 20000,
-    grassTufts: 1,
-  },
-  high: {
-    minDpr: 1.08,
-    idleDpr: 1.65,
-    maxDpr: 1.9,
-    movingDpr: 1.35,
-    idleCloudQuality: 0.74,
-    movingCloudQuality: 0.16,
-    grassBlades: 26000,
-    grassTufts: 1,
-  },
-} satisfies Record<
-  ResolvedGraphicsQuality,
-  {
-    minDpr: number;
-    idleDpr: number;
-    maxDpr: number;
-    movingDpr: number;
-    idleCloudQuality: number;
-    movingCloudQuality: number;
-    grassBlades: number;
-    grassTufts: number;
-  }
->;
+export type { ResolvedGraphicsQuality } from "@/lib/quality";
 const CLOUD_VERTEX = /* glsl */ `
   varying vec3 vWorldPos;
   void main() {
@@ -189,16 +153,18 @@ const CLOUD_FRAGMENT = /* glsl */ `
     float rayLen = min(end - start, 95.0);
     if (rayLen <= 0.0) discard;
 
-    float steps = clamp(uSteps, 6.0, 22.0);
+    float steps = clamp(uSteps, 6.0, 30.0);
     float stride = rayLen / steps;
+    // per-pixel jitter on the march offset removes visible step banding
+    float jitter = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
     vec2 wind = normalize(uWindDir);
     vec3 color = vec3(0.0);
     float alpha = 0.0;
     float threshold = mix(0.86, 0.32, clamp(uCoverage, 0.0, 1.0));
 
-    for (int i = 0; i < 24; i++) {
+    for (int i = 0; i < 32; i++) {
       if (float(i) >= steps || alpha > 0.965) break;
-      float fi = (float(i) + 0.5) / steps;
+      float fi = (float(i) + jitter) / steps;
       vec3 p = ro + rd * (start + fi * rayLen);
       float vertical = 1.0 - abs(p.y - uHeight) / max(0.001, uThickness * 0.5);
       vertical = smoothstep(0.0, 0.72, vertical);
@@ -216,6 +182,11 @@ const CLOUD_FRAGMENT = /* glsl */ `
       color += sampleColor * a;
       alpha += a;
     }
+
+    // silver lining: strong forward scattering brightens cloud edges that
+    // sit between the camera and the sun (golden rims at a low sun)
+    float silver = pow(max(dot(rd, uSunDir), 0.0), 6.0);
+    color *= 1.0 + silver * 0.5;
 
     alpha *= uOpacity;
     alpha *= 1.0 - clamp(uFog * 0.18, 0.0, 0.18);
@@ -236,6 +207,7 @@ function CloudVolumeLayer({
   order: number;
 }) {
   const material = useRef<THREE.ShaderMaterial>(null);
+  const profile = useQualityProfile();
   const uniforms = useMemo(
     () => ({
       uTime: { value: 0 },
@@ -270,7 +242,9 @@ function CloudVolumeLayer({
     m.uniforms.uSpeed.value += (layer.speed * (1 + params.gust * 0.18) - m.uniforms.uSpeed.value) * k;
     m.uniforms.uFog.value += (params.clouds.fog - m.uniforms.uFog.value) * k;
     m.uniforms.uDay.value += (params.dayFactor - m.uniforms.uDay.value) * k;
-    m.uniforms.uSteps.value = Math.round(THREE.MathUtils.lerp(6, 18, quality));
+    m.uniforms.uSteps.value = Math.round(
+      THREE.MathUtils.lerp(6, profile.cloudMaxSteps, quality),
+    );
     (m.uniforms.uWindDir.value as THREE.Vector2).set(params.windVec[0], params.windVec[1]).normalize();
     (m.uniforms.uBaseColor.value as THREE.Color).set(params.clouds.baseColor);
     (m.uniforms.uShadowColor.value as THREE.Color).set(params.clouds.shadowColor);
@@ -303,17 +277,51 @@ function VolumetricClouds({
   quality: number;
   moving: boolean;
 }) {
-  if (moving) {
+  const profile = useQualityProfile();
+  if (moving || profile.cloudLayers === 1) {
     return <CloudVolumeLayer layer={params.clouds.mid} params={params} quality={quality} order={-2} />;
   }
 
   return (
     <group>
-      <CloudVolumeLayer layer={params.clouds.high} params={params} quality={quality * 0.84} order={-3} />
+      {profile.cloudLayers === 3 && (
+        <CloudVolumeLayer layer={params.clouds.high} params={params} quality={quality * 0.84} order={-3} />
+      )}
       <CloudVolumeLayer layer={params.clouds.mid} params={params} quality={quality} order={-2} />
       <CloudVolumeLayer layer={params.clouds.low} params={params} quality={quality * 0.92} order={-1} />
     </group>
   );
+}
+
+// Reads the DOM rotate-controls bus and drives the orbit camera (left/right
+// spin + up/down tilt). Kept as a tiny useFrame component so button presses
+// never touch React state per frame.
+function CameraRotateDriver() {
+  useFrame((state, dt) => {
+    if (cameraBus.rotate === 0 && cameraBus.tilt === 0) return;
+    const controls = state.controls as unknown as {
+      getAzimuthalAngle?: () => number;
+      setAzimuthalAngle?: (a: number) => void;
+      getPolarAngle?: () => number;
+      setPolarAngle?: (a: number) => void;
+    } | null;
+    if (!controls?.getAzimuthalAngle || !controls.setAzimuthalAngle) return;
+    const fast = cameraBus.fast ? ROTATE_FAST_MULTIPLIER : 1;
+    if (cameraBus.rotate !== 0) {
+      controls.setAzimuthalAngle(
+        controls.getAzimuthalAngle() + cameraBus.rotate * ROTATE_SPEED * fast * dt,
+      );
+    }
+    if (cameraBus.tilt !== 0 && controls.getPolarAngle && controls.setPolarAngle) {
+      const next = THREE.MathUtils.clamp(
+        controls.getPolarAngle() - cameraBus.tilt * TILT_SPEED * fast * dt,
+        0.12,
+        Math.PI / 1.8 - 0.01,
+      );
+      controls.setPolarAngle(next);
+    }
+  });
+  return null;
 }
 
 function SceneReadySignal({ onReady }: { onReady?: () => void }) {
@@ -345,6 +353,7 @@ function Plateau({
   grassTufts: number;
 }) {
   const { scene } = useGLTF("/models/island.glb");
+  const profile = useQualityProfile();
   const surface = useMemo(
     () => sampleIslandSurface(scene, ISLAND_SCALE),
     [scene],
@@ -354,7 +363,13 @@ function Plateau({
       <Grass wind={wind} gust={gust} windVec={windVec} count={grassBlades} surface={surface} />
       <GrassClumps wind={wind} gust={gust} windVec={windVec} count={grassTufts} surface={surface} />
       <Flora radius={PLATEAU_R + 2} surface={surface} />
-      <Fireflies night={night} baseY={PLATEAU_Y - 0.5} radius={PLATEAU_R + 1} height={11} />
+      <Fireflies
+        night={night}
+        count={profile.fireflies}
+        baseY={PLATEAU_Y - 0.5}
+        radius={PLATEAU_R + 1}
+        height={11}
+      />
       <FallingLeaves wind={wind} gust={gust} windVec={windVec} season={season} surface={surface} treeY={TREE_Y} radius={PLATEAU_R + 2} />
     </>
   );
@@ -376,19 +391,24 @@ export default function Experience({
   highlight?: number;
   fly?: boolean;
   stargazers?: Stargazer[] | null;
-  graphicsQuality?: ResolvedGraphicsQuality;
+  graphicsQuality?: Quality;
   onSelectHouse?: (i: number) => void;
   onFindDove?: () => void;
   onReady?: () => void;
 }) {
-  const quality = QUALITY_CONFIG[graphicsQuality];
+  const quality = QUALITY_PROFILES[graphicsQuality];
   // Night factor drives warm lights and fireflies.
   const night = Math.min(1, Math.max(0, 1 - params.dayFactor * 1.5));
-  const sunDir = new THREE.Vector3(...params.sunPos).normalize();
-  const sunFar = sunDir.multiplyScalar(120);
+  // Visible, DEPTH-TESTED sun disc: the z-buffer occludes it behind the tree,
+  // so bloom can only glow where the sun is genuinely visible (real physics —
+  // light through canopy gaps, never through wood).
+  const sunFar = new THREE.Vector3(...params.sunPos).normalize().multiplyScalar(120);
   // Quality presets keep motion responsive without dropping the scene into a visibly pixelated state.
   const [dpr, setDpr] = useState(quality.idleDpr);
   const [cloudQuality, setCloudQuality] = useState(quality.idleCloudQuality);
+  // Extra degrade knob: scales particle budgets down when the GPU struggles,
+  // so PerformanceMonitor has more to give back than resolution alone.
+  const [perfBudget, setPerfBudget] = useState(1);
   const [cameraMoving, setCameraMoving] = useState(false);
   const settleTimer = useRef<number | null>(null);
   const performanceMoving = fly || cameraMoving;
@@ -436,19 +456,21 @@ export default function Experience({
       dpr={effectiveDpr}
       camera={{ position: [26, 18, 26], fov: 42, near: 0.1, far: 600 }}
       gl={{
-        antialias: graphicsQuality === "high",
+        antialias: quality.antialias,
         alpha: false,
         powerPreference: "high-performance",
       }}
       performance={{ min: 0.55 }}
       onCreated={({ gl }) => {
         gl.shadowMap.enabled = true;
-        gl.shadowMap.type = THREE.PCFShadowMap;
+        gl.shadowMap.type =
+          quality.shadowType === "pcfsoft" ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
         gl.toneMapping = THREE.ACESFilmicToneMapping;
-        gl.toneMappingExposure = 1.07;
+        gl.toneMappingExposure = 1.12;
         gl.outputColorSpace = THREE.SRGBColorSpace;
       }}
     >
+      <QualityContext.Provider value={quality}>
       <Suspense fallback={null}>
         <AssetGate />
         {/* Adaptive resolution keeps animation responsive. */}
@@ -458,20 +480,23 @@ export default function Experience({
           onDecline={() => {
             setDpr((d) => Math.max(quality.minDpr, +(d - 0.14).toFixed(2)));
             setCloudQuality((q) => Math.max(quality.movingCloudQuality, +(q - 0.1).toFixed(2)));
+            setPerfBudget((b) => Math.max(0.45, +(b - 0.2).toFixed(2)));
           }}
           onIncline={() => {
             setDpr((d) => Math.min(quality.maxDpr, +(d + 0.1).toFixed(2)));
             setCloudQuality((q) => Math.min(quality.idleCloudQuality, +(q + 0.06).toFixed(2)));
+            setPerfBudget((b) => Math.min(1, +(b + 0.12).toFixed(2)));
           }}
           onFallback={() => {
             setDpr(quality.minDpr);
             setCloudQuality(quality.movingCloudQuality);
+            setPerfBudget(0.45);
           }}
         />
         <SceneReadySignal onReady={onReady} />
         <SceneRig params={params} shadowsActive={!performanceMoving} />
         <Sky params={params} />
-        <NightSky params={params} quality={graphicsQuality} />
+        <NightSky params={params} />
 
         {/* Soft fill lights keep the island readable. */}
         <hemisphereLight
@@ -485,18 +510,15 @@ export default function Experience({
           color="#ffd29a"
         />
 
-        {/* Sun marker follows the weather-driven sun direction. */}
-        {params.dayFactor > 0.02 && (
-          <mesh position={sunFar.toArray()}>
-            <sphereGeometry args={[7, 24, 24]} />
-            <meshBasicMaterial
-              color={params.sunColor}
-              toneMapped={false}
-              transparent
-              opacity={0.5 + params.dayFactor * 0.5}
-            />
-          </mesh>
-        )}
+        {/* Sun disc: rendered physically in the dome AND as a mesh here so the
+            god-rays pass has a real occludable light source (the BSL look —
+            golden shafts through the canopy at a low sun). */}
+        <mesh position={sunFar.toArray()} visible={params.sunElevationDeg > -0.8}>
+          <sphereGeometry args={[4.4, 20, 20]} />
+          {/* Opaque: the god-rays depth mask needs a solid occludable source;
+              softness comes from the dome shader + bloom. */}
+          <meshBasicMaterial color={params.sunColor} toneMapped={false} depthWrite={false} />
+        </mesh>
 
         {/* Weather-driven volumetric clouds. */}
         <VolumetricClouds
@@ -525,6 +547,7 @@ export default function Experience({
               windVec={params.windVec}
               leafColor={params.leafColor}
               snow={params.snow}
+              twilight={params.twilight}
               stargazers={stargazers}
             >
               <Houses
@@ -550,10 +573,27 @@ export default function Experience({
           gust={params.gust}
           windVec={params.windVec}
           storm={params.storm}
+          budget={perfBudget}
         />
         <Preload all />
-      </Suspense>
 
+        {/* Filmic finish (high/extreme): gentle bloom on lanterns, fireflies
+            and the low sun; ACES stays the single tone-mapping step. */}
+        {/* BSL-style finish (high/extreme). NO screen-space god-rays pass: its
+            depth mask kept compositing the sun OVER the canopy. Instead the
+            depth-tested sun disc + wide bloom produce the same shafts-through-
+            gaps look with guaranteed occlusion. multisampling=4 keeps MSAA. */}
+        {quality.bloom && (
+          <EffectComposer multisampling={4}>
+            <Bloom mipmapBlur intensity={0.7} luminanceThreshold={0.75} luminanceSmoothing={0.3} />
+            <HueSaturation saturation={0.18} />
+            <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
+          </EffectComposer>
+        )}
+      </Suspense>
+      </QualityContext.Provider>
+
+      {!fly && <CameraRotateDriver />}
       {fly ? (
         <CozyFlyControls speed={8} />
       ) : (

@@ -1,13 +1,13 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { MAX_HOUSES } from "@/lib/layout";
 import { sampleBranchAnchors } from "@/lib/branches";
-import { buildLantern, LANTERN_SIZE } from "@/lib/lantern";
+import { buildLantern, setLanternGlow, LANTERN_SIZE } from "@/lib/lantern";
 import { TIER_SIZE, resolveTier } from "@/lib/rarity";
 import type { Stargazer } from "@/lib/stargazers";
 
@@ -474,12 +474,22 @@ export function Bridges({
     });
   });
 
+  // Lanterns are cloned ONCE per edge set — cloning per render (and per night
+  // change) was a big source of main-thread churn.
+  const lanterns = useMemo(
+    () => edges.map(() => buildLantern(lanternScene, LANTERN_SIZE, 0, 1)),
+    [edges, lanternScene],
+  );
+  useEffect(() => {
+    for (const lantern of lanterns) setLanternGlow(lantern, 0.2 + night * 2.2);
+  }, [lanterns, night]);
+
   const lightsOn = night > 0.04;
   if (!bridge) return null;
   return (
     <group>
       {edges.map(([i, j], k) => {
-        const lantern = buildLantern(lanternScene, LANTERN_SIZE, 0, 0.2 + night * 2.2);
+        const lantern = lanterns[k];
         return (
           <group key={`${i}-${j}`}>
             <group
@@ -500,11 +510,13 @@ export function Bridges({
               }}
             >
               <primitive object={lantern} />
-              {lightsOn && k < 5 && (
+              {/* Always mounted: unmounting lights forces a full scene shader
+                  recompile (day/night switch freeze). Intensity 0 is free. */}
+              {k < 5 && (
                 <pointLight
                   color="#ffb765"
                   position={[0, 0.4, 0]}
-                  intensity={4.6 * night}
+                  intensity={lightsOn ? 4.6 * night : 0}
                   distance={3.6}
                   decay={2}
                 />

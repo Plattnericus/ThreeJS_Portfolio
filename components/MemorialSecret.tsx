@@ -38,15 +38,18 @@ export default function MemorialSecret({ onClose }: { onClose: () => void }) {
   const copyRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  // Escape handling lives in the page-level hierarchy (app/page.tsx).
 
   useEffect(() => {
+    if (!rootRef.current) return;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced || !rootRef.current) return;
+    if (reduced) {
+      // The panel starts at opacity-0 and normally fades in via GSAP. When the
+      // intro is skipped it must still become visible, otherwise an invisible
+      // full-screen layer keeps swallowing clicks and blocks the camera.
+      gsap.set(rootRef.current, { autoAlpha: 1 });
+      return;
+    }
 
     const ctx = gsap.context(() => {
       const copyItems = copyRef.current

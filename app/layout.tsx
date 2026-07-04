@@ -1,7 +1,25 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
+import { Nunito } from "next/font/google";
 import "./globals.css";
 import { fetchOwner, ownerLogin } from "@/lib/owner";
 import { siteUrl } from "@/lib/site";
+
+// One cozy, highly readable rounded face for the WHOLE site (self-hosted via
+// next/font — no external requests, no layout shift).
+const nunito = Nunito({
+  subsets: ["latin"],
+  variable: "--font-nunito",
+  display: "swap",
+});
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#0b1320" },
+    { media: "(prefers-color-scheme: light)", color: "#3a2712" },
+  ],
+};
 
 // SEO is built from the real GitHub owner — nothing hardcoded.
 export async function generateMetadata(): Promise<Metadata> {
@@ -73,7 +91,18 @@ export default async function RootLayout({
   const login = owner?.login ?? ownerLogin();
   const base = siteUrl();
 
-  // Structured data so search engines (and rich results) understand the person.
+  // Structured data so search engines (and rich results) understand both the
+  // person AND the site itself.
+  const websiteLd = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: `${owner?.name ?? login} — Portfolio`,
+    url: base,
+    description:
+      "A living GitHub Star Tree: every stargazer becomes a house on a floating island with real-time Alpine weather, a real sun and moon, and seasons.",
+    inLanguage: ["en", "de", "it"],
+    author: { "@type": "Person", name: owner?.name ?? login },
+  };
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "Person",
@@ -95,12 +124,16 @@ export default async function RootLayout({
   };
 
   return (
-    <html lang="en">
+    <html lang="en" className={nunito.variable}>
       <body className="font-sans">
         {children}
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteLd) }}
         />
       </body>
     </html>

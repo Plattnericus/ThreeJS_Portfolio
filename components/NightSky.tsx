@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
-import type { ResolvedGraphicsQuality } from "./Experience";
+import { useQualityProfile } from "@/lib/quality";
 import type { SceneParams } from "@/lib/weather";
 
 const STAR_VERTEX = /* glsl */ `
@@ -11,10 +11,12 @@ const STAR_VERTEX = /* glsl */ `
   attribute float aPhase;
   varying vec3 vColor;
   varying float vPhase;
+  varying float vAltitude;
   uniform float uIntensity;
   void main() {
     vColor = color;
     vPhase = aPhase;
+    vAltitude = normalize(position).y;
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     gl_PointSize = aSize * (220.0 / max(1.0, -mvPosition.z)) * (0.25 + uIntensity * 0.75);
     gl_Position = projectionMatrix * mvPosition;
@@ -25,6 +27,7 @@ const STAR_FRAGMENT = /* glsl */ `
   precision highp float;
   varying vec3 vColor;
   varying float vPhase;
+  varying float vAltitude;
   uniform float uTime;
   uniform float uIntensity;
   void main() {
@@ -32,8 +35,12 @@ const STAR_FRAGMENT = /* glsl */ `
     float d = dot(p, p);
     if (d > 0.25) discard;
     float core = smoothstep(0.25, 0.015, d);
-    float twinkle = 0.76 + 0.24 * sin(uTime * (0.7 + fract(vPhase) * 1.6) + vPhase * 19.17);
-    gl_FragColor = vec4(vColor * (0.82 + twinkle * 0.3), core * uIntensity * twinkle);
+    // Real atmospheric extinction: stars dim (and twinkle harder) near the
+    // horizon where their light crosses much more air.
+    float extinction = mix(0.18, 1.0, smoothstep(-0.02, 0.24, vAltitude));
+    float lowFlicker = 1.0 + (1.0 - smoothstep(0.0, 0.3, vAltitude)) * 0.5;
+    float twinkle = 0.76 + 0.24 * sin(uTime * (0.7 + fract(vPhase) * 1.6) * lowFlicker + vPhase * 19.17);
+    gl_FragColor = vec4(vColor * (0.82 + twinkle * 0.3), core * uIntensity * twinkle * extinction);
   }
 `;
 
@@ -48,9 +55,11 @@ const MOON_VERTEX = /* glsl */ `
 const MOON_FRAGMENT = /* glsl */ `
   precision highp float;
   varying vec2 vUv;
-  uniform float uPhase;
   uniform float uIntensity;
-  uniform float uTime;
+  uniform vec3 uLightDir; // toward the sun, in billboard-local space
+  uniform sampler2D uMap;
+  uniform float uHasMap;
+  uniform float uWarm; // 1 near the horizon: reddened + dimmed like a real moonrise
 
   float hash(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -115,22 +124,41 @@ const MOON_FRAGMENT = /* glsl */ `
       return;
     }
 
+    // Shade a virtual sphere behind the billboard with the REAL sun direction:
+    // phase fraction and lit-limb orientation fall out of the geometry.
     vec3 normal = normalize(vec3(p.xy, sqrt(max(0.001, 1.0 - r * r))));
-    float angle = uPhase * 6.28318530718;
-    vec3 lightDir = normalize(vec3(sin(angle), 0.0, -cos(angle)));
-    float lit = smoothstep(-0.03, 0.08, dot(normal, lightDir));
-    float limb = smoothstep(1.0, 0.18, r);
-    float terrain = fbm(p * 3.0 + vec2(0.0, uTime * 0.001));
-    float fine = fbm(p * 15.0);
-    float craters = craterField(p);
-    float maria = smoothstep(0.54, 0.86, fbm(p * 2.0 + 4.2));
-    vec3 base = mix(vec3(0.68, 0.70, 0.67), vec3(0.93, 0.91, 0.82), terrain * 0.7 + fine * 0.18);
-    base = mix(base, vec3(0.43, 0.45, 0.46), maria * 0.32);
-    base += craters * vec3(0.58, 0.56, 0.5);
-    base *= 0.58 + limb * 0.52;
-    base *= 0.12 + lit * 0.95;
-    float alpha = (1.0 - smoothstep(0.97, 1.0, r)) * uIntensity * (0.1 + lit * 0.9);
-    gl_FragColor = vec4(base, alpha);
+    vec3 lightDir = normalize(uLightDir);
+    float lit = smoothstep(-0.05, 0.12, dot(normal, lightDir));
+    float limb = smoothstep(1.0, 0.32, r);
+
+    vec3 albedo;
+    if (uHasMap > 0.5) {
+      // Near-side equirectangular sampling (LROC map is centered on lon 0).
+      vec2 uv = vec2(
+        0.5 + atan(normal.x, normal.z) / 6.28318530718,
+        0.5 + asin(clamp(normal.y, -1.0, 1.0)) / 3.14159265359
+      );
+      albedo = texture2D(uMap, uv).rgb * 1.6;
+    } else {
+      float terrain = fbm(p * 3.0);
+      float fine = fbm(p * 15.0);
+      float craters = craterField(p);
+      float maria = smoothstep(0.54, 0.86, fbm(p * 2.0 + 4.2));
+      albedo = mix(vec3(0.68, 0.70, 0.67), vec3(0.93, 0.91, 0.82), terrain * 0.7 + fine * 0.18);
+      albedo = mix(albedo, vec3(0.43, 0.45, 0.46), maria * 0.32);
+      albedo += craters * vec3(0.58, 0.56, 0.5);
+    }
+
+    // Atmospheric reddening near the horizon (real moonrise look): the short
+    // wavelengths scatter away, the disc dims.
+    albedo *= mix(vec3(1.0), vec3(1.04, 0.6, 0.36), uWarm * 0.8);
+    float extinction = mix(1.0, 0.55, uWarm);
+
+    vec3 sunlit = albedo * (0.3 + limb * 0.82) * lit * extinction;
+    // Faint, slightly blue earthshine keeps the dark side barely readable.
+    vec3 earthshine = albedo * vec3(0.36, 0.43, 0.58) * 0.09 * (1.0 - lit) * extinction;
+    float alpha = (1.0 - smoothstep(0.965, 1.0, r)) * uIntensity * clamp(0.08 + lit * 0.92, 0.0, 1.0);
+    gl_FragColor = vec4(sunlit + earthshine, alpha);
   }
 `;
 
@@ -142,16 +170,10 @@ function seeded(seed: number) {
   };
 }
 
-function starCount(quality: ResolvedGraphicsQuality): number {
-  if (quality === "low") return 260;
-  if (quality === "high") return 900;
-  return 560;
-}
-
-function StarField({ params, quality }: { params: SceneParams; quality: ResolvedGraphicsQuality }) {
+function StarField({ params }: { params: SceneParams }) {
   const material = useRef<THREE.ShaderMaterial>(null);
+  const count = useQualityProfile().stars;
   const geometry = useMemo(() => {
-    const count = starCount(quality);
     const rand = seeded(40429);
     const positions = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
@@ -187,7 +209,7 @@ function StarField({ params, quality }: { params: SceneParams; quality: Resolved
     g.setAttribute("aSize", new THREE.BufferAttribute(sizes, 1));
     g.setAttribute("aPhase", new THREE.BufferAttribute(phases, 1));
     return g;
-  }, [quality]);
+  }, [count]);
 
   const uniforms = useMemo(
     () => ({
@@ -225,27 +247,67 @@ function Moon({ params }: { params: SceneParams }) {
   const mesh = useRef<THREE.Mesh>(null);
   const material = useRef<THREE.ShaderMaterial>(null);
   const { camera } = useThree();
-  const moonOffset = useMemo(() => new THREE.Vector3(), []);
+  const sunDir = useMemo(() => new THREE.Vector3(), []);
+  const invQuat = useMemo(() => new THREE.Quaternion(), []);
   const uniforms = useMemo(
     () => ({
-      uPhase: { value: params.moon.phase },
       uIntensity: { value: 0 },
-      uTime: { value: 0 },
+      uLightDir: { value: new THREE.Vector3(0, 0, 1) },
+      uMap: { value: null as THREE.Texture | null },
+      uHasMap: { value: 0 },
+      uWarm: { value: 0 },
     }),
     [],
   );
 
-  useFrame((state, dt) => {
+  // Real NASA LROC albedo map (public domain); the procedural surface in the
+  // shader stays as fallback if the texture is missing or fails to load.
+  useEffect(() => {
+    let disposed = false;
+    new THREE.TextureLoader().load(
+      "/textures/moon_albedo_1k.jpg",
+      (tex) => {
+        if (disposed) {
+          tex.dispose();
+          return;
+        }
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = 4;
+        uniforms.uMap.value = tex;
+        uniforms.uHasMap.value = 1;
+      },
+      undefined,
+      () => undefined,
+    );
+    return () => {
+      disposed = true;
+      uniforms.uMap.value?.dispose();
+      uniforms.uMap.value = null;
+      uniforms.uHasMap.value = 0;
+    };
+  }, [uniforms]);
+
+  useFrame((_, dt) => {
     const current = mesh.current;
     const m = material.current;
     if (!current || !m) return;
-    moonOffset.set(...params.moon.pos).applyQuaternion(camera.quaternion);
-    current.position.copy(moonOffset);
+    // World-space sky position: the parent group follows only the camera's
+    // POSITION, so the moon keeps its real place while the camera orbits.
+    current.position.set(params.moon.pos[0], params.moon.pos[1], params.moon.pos[2]);
     current.scale.setScalar(params.moon.size);
-    current.quaternion.copy(camera.quaternion);
-    m.uniforms.uPhase.value += (params.moon.phase - m.uniforms.uPhase.value) * Math.min(1, dt * 1.6);
+    current.quaternion.copy(camera.quaternion); // billboard facing only
+    // Light the disc from the actual sun direction, expressed in the
+    // billboard's camera-aligned local frame -> real phase + limb tilt.
+    sunDir.set(params.sunPos[0], params.sunPos[1], params.sunPos[2]).normalize();
+    invQuat.copy(camera.quaternion).invert();
+    sunDir.applyQuaternion(invQuat);
+    (m.uniforms.uLightDir.value as THREE.Vector3).copy(sunDir);
     m.uniforms.uIntensity.value += (params.moon.visible - m.uniforms.uIntensity.value) * Math.min(1, dt * 1.2);
-    m.uniforms.uTime.value = state.clock.elapsedTime;
+    // Low moon -> atmospheric reddening (moon dir y over the 88-unit radius).
+    const altitude = params.moon.pos[1] / 88;
+    const warm = 1 - THREE.MathUtils.smoothstep(altitude, 0.05, 0.3);
+    m.uniforms.uWarm.value += (warm - m.uniforms.uWarm.value) * Math.min(1, dt * 1.5);
+    current.visible = m.uniforms.uIntensity.value > 0.004;
   });
 
   return (
@@ -265,13 +327,7 @@ function Moon({ params }: { params: SceneParams }) {
   );
 }
 
-export function NightSky({
-  params,
-  quality,
-}: {
-  params: SceneParams;
-  quality: ResolvedGraphicsQuality;
-}) {
+export function NightSky({ params }: { params: SceneParams }) {
   const group = useRef<THREE.Group>(null);
   const { camera } = useThree();
 
@@ -282,12 +338,12 @@ export function NightSky({
   return (
     <>
       <group ref={group} renderOrder={-10}>
-        <StarField params={params} quality={quality} />
+        <StarField params={params} />
         <Moon params={params} />
       </group>
       <directionalLight
         position={params.moon.pos}
-        intensity={params.moon.visible * 0.18}
+        intensity={params.moon.visible * 0.2 * (0.3 + params.moon.illumination * 0.7)}
         color="#dbe7ff"
       />
     </>

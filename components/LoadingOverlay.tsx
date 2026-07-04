@@ -3,6 +3,7 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { useProgress } from "@react-three/drei";
 import gsap from "gsap";
+import { useI18n } from "@/lib/i18n";
 
 const MIN_VISIBLE_MS = 900;
 const INSTANT_CACHE_GRACE_MS = 1800;
@@ -96,6 +97,7 @@ export default function LoadingOverlay({
   starsReady: boolean;
   weatherReady: boolean;
 }) {
+  const { t } = useI18n();
   const { progress, active, loaded, total, item } = useProgress();
   const [hidden, setHidden] = useState(false);
   const [exiting, setExiting] = useState(false);
@@ -189,26 +191,26 @@ export default function LoadingOverlay({
   const loadedAssets = total > 0 ? Math.min(loaded, total) : 0;
   const assetCount = total > 0 ? ` (${loadedAssets} / ${total})` : "";
   const phase = (() => {
-    if (!starsReady) return "Loading stargazers";
-    if (!weatherReady) return "Loading weather";
-    if (displayProgress < 52) return "Loading assets";
-    if (displayProgress < 76) return "Preparing models";
-    if (displayProgress < 92) return "Building scene";
-    if (displayProgress < 96) return "Starting renderer";
-    return "Opening scene";
+    if (!starsReady) return t("load.stargazers");
+    if (!weatherReady) return t("load.weather");
+    if (displayProgress < 52) return t("load.assets");
+    if (displayProgress < 76) return t("load.models");
+    if (displayProgress < 92) return t("load.scene");
+    if (displayProgress < 96) return t("load.renderer");
+    return t("load.opening");
   })();
   const status = `${phase}${assetCount}`;
   const itemName = item?.split("/").pop()?.replace(/\?.*$/, "");
   const detail =
     total > 0
       ? itemName
-        ? `Asset ${loadedAssets} of ${total}: ${itemName}`
-        : `Assets ${loadedAssets} of ${total}`
+        ? t("load.assetDetail", { n: loadedAssets, total, item: itemName })
+        : t("load.assetsDetail", { n: loadedAssets, total })
       : !starsReady
-        ? "Fetching the live village"
+        ? t("load.village")
         : !weatherReady
-          ? "Fetching mountain weather"
-          : "Preparing the renderer";
+          ? t("load.mountain")
+          : t("load.preparing");
 
   // Strokes draw outward, then leaves bloom at the tips.
   const { branches, leaves } = TREE;
@@ -222,7 +224,7 @@ export default function LoadingOverlay({
     >
       <div className="loader-glow" />
 
-      <div className="loader-stage" aria-label="Loading Star Tree">
+      <div className="loader-stage" aria-label={t("load.aria")}>
         <div className="loader-mark">
           <svg viewBox="0 0 200 210" className="loader-svg" aria-hidden="true">
             <defs>

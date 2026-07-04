@@ -65,15 +65,22 @@ function hourlyNum(hourly: Record<string, unknown>, key: string, index: number, 
   return num(arr[index], fallback);
 }
 
-function localDateParts(time: unknown): { year: number; month: number; day: number; hour: number } {
+function localDateParts(time: unknown): {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+} {
   if (typeof time === "string") {
-    const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})/.exec(time);
+    const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(time);
     if (match) {
       return {
         year: Number(match[1]),
         month: Number(match[2]) - 1,
         day: Number(match[3]),
         hour: Number(match[4]),
+        minute: Number(match[5]),
       };
     }
   }
@@ -83,7 +90,13 @@ function localDateParts(time: unknown): { year: number; month: number; day: numb
     month: now.getMonth(),
     day: now.getDate(),
     hour: now.getHours(),
+    minute: now.getMinutes(),
   };
+}
+
+function dailyIso(daily: Record<string, unknown>, key: string): string | null {
+  const arr = daily[key];
+  return Array.isArray(arr) && typeof arr[0] === "string" ? arr[0] : null;
 }
 
 export async function GET() {
@@ -92,6 +105,7 @@ export async function GET() {
     `&longitude=${GOSSENSASS.lon}` +
     `&current=${CURRENT_FIELDS}` +
     `&hourly=${HOURLY_FIELDS}` +
+    `&daily=sunrise,sunset` +
     `&forecast_days=1` +
     `&timezone=${encodeURIComponent(GOSSENSASS.tz)}`;
 
@@ -101,6 +115,7 @@ export async function GET() {
     const data = await res.json();
     const c = data.current ?? {};
     const hourly = data.hourly ?? {};
+    const daily = data.daily ?? {};
     const hourIndex = currentHourIndex(hourly.time, c.time);
     const date = localDateParts(c.time);
 
@@ -124,10 +139,14 @@ export async function GET() {
       cloudHigh: pct(hourlyNum(hourly, "cloud_cover_high", hourIndex, 20), 0.2),
       visibilityM: hourlyNum(hourly, "visibility", hourIndex, 40000),
       hour: date.hour,
+      minute: date.minute,
       day: date.day,
       month: date.month,
       year: date.year,
       sky: skyFromCode(num(c.weather_code, 0)),
+      isDay: num(c.is_day, 1) === 1,
+      sunrise: dailyIso(daily, "sunrise"),
+      sunset: dailyIso(daily, "sunset"),
     });
   } catch {
     const date = localDateParts(null);
@@ -152,6 +171,7 @@ export async function GET() {
       cloudHigh: 0.25,
       visibilityM: 40000,
       hour: date.hour,
+      minute: date.minute,
       day: date.day,
       month: date.month,
       year: date.year,

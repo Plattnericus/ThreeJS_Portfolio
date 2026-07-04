@@ -4,39 +4,41 @@ import { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import type { Precip } from "@/lib/weather";
+import { useQualityProfile } from "@/lib/quality";
 
 const AREA = 34; // half-extent in X/Z
 const TOP = 46;
-const MAX_RAIN = 1600;
-const MAX_SNOW = 900;
 
 // Snow — soft drifting points. Fixed-size buffer + draw range so changing the
-// intensity never resizes a GPU attribute (three.js forbids that).
+// intensity never resizes a GPU attribute (three.js forbids that); the buffer
+// itself is sized by the quality tier and only re-allocates when that changes.
 function Snow({
   intensity,
   wind,
   gust,
   windVec,
+  max,
 }: {
   intensity: number;
   wind: number;
   gust: number;
   windVec: [number, number];
+  max: number;
 }) {
   const ref = useRef<THREE.Points>(null);
-  const count = Math.max(1, Math.floor(MAX_SNOW * intensity));
+  const count = Math.max(1, Math.floor(max * intensity));
 
   const { positions, speeds } = useMemo(() => {
-    const positions = new Float32Array(MAX_SNOW * 3);
-    const speeds = new Float32Array(MAX_SNOW);
-    for (let i = 0; i < MAX_SNOW; i++) {
+    const positions = new Float32Array(max * 3);
+    const speeds = new Float32Array(max);
+    for (let i = 0; i < max; i++) {
       positions[i * 3] = (Math.random() - 0.5) * AREA * 2;
       positions[i * 3 + 1] = Math.random() * TOP;
       positions[i * 3 + 2] = (Math.random() - 0.5) * AREA * 2;
       speeds[i] = 1.4 * (0.7 + Math.random() * 0.6);
     }
     return { positions, speeds };
-  }, []);
+  }, [max]);
 
   useFrame((state, dt) => {
     const pts = ref.current;
@@ -71,7 +73,7 @@ function Snow({
 
   return (
     <points ref={ref} frustumCulled={false}>
-      <bufferGeometry>
+      <bufferGeometry key={max}>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
       </bufferGeometry>
       <pointsMaterial size={0.32} color="#ffffff" transparent opacity={0.95} depthWrite={false} sizeAttenuation />
@@ -86,21 +88,23 @@ function Rain({
   wind,
   gust,
   windVec,
+  max,
 }: {
   intensity: number;
   wind: number;
   gust: number;
   windVec: [number, number];
+  max: number;
 }) {
   const ref = useRef<THREE.LineSegments>(null);
-  const count = Math.max(1, Math.floor(MAX_RAIN * Math.max(0.35, intensity)));
+  const count = Math.max(1, Math.floor(max * Math.max(0.35, intensity)));
   const len = 1.1 + intensity * 1.6; // streak length
   const slant = THREE.MathUtils.clamp((wind + gust * 0.32) * 0.5, 0, 2.4);
 
   const { positions, speeds } = useMemo(() => {
-    const positions = new Float32Array(MAX_RAIN * 6);
-    const speeds = new Float32Array(MAX_RAIN);
-    for (let i = 0; i < MAX_RAIN; i++) {
+    const positions = new Float32Array(max * 6);
+    const speeds = new Float32Array(max);
+    for (let i = 0; i < max; i++) {
       const x = (Math.random() - 0.5) * AREA * 2;
       const y = Math.random() * TOP;
       const z = (Math.random() - 0.5) * AREA * 2;
@@ -113,7 +117,7 @@ function Rain({
       speeds[i] = 26 * (0.75 + Math.random() * 0.5);
     }
     return { positions, speeds };
-  }, []);
+  }, [max]);
 
   useFrame((_, dt) => {
     const seg = ref.current;
@@ -150,7 +154,7 @@ function Rain({
 
   return (
     <lineSegments ref={ref} frustumCulled={false}>
-      <bufferGeometry>
+      <bufferGeometry key={max}>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
       </bufferGeometry>
       <lineBasicMaterial
@@ -278,7 +282,15 @@ function StormClouds({
 
 // Lightning — a bright flash (sky-wide light), a glowing forked bolt, and a
 // short after-flicker, fired at random intervals during a storm.
-function Lightning({ flashRef }: { flashRef: React.MutableRefObject<number> }) {
+// Always mounted (lights included) — unmounting a light forces a full scene
+// shader recompile. `active` gates the strikes instead.
+function Lightning({
+  flashRef,
+  active,
+}: {
+  flashRef: React.MutableRefObject<number>;
+  active: boolean;
+}) {
   const light = useRef<THREE.PointLight>(null);
   const ambient = useRef<THREE.AmbientLight>(null);
   const bolt = useRef<THREE.LineSegments>(null);
@@ -314,6 +326,15 @@ function Lightning({ flashRef }: { flashRef: React.MutableRefObject<number> }) {
 
   useFrame((state, dt) => {
     const t = state.clock.elapsedTime;
+    if (!active) {
+      next.current = t + 1.5;
+      flashRef.current = 0;
+      if (light.current) light.current.intensity = 0;
+      if (ambient.current) ambient.current.intensity = 0;
+      const off = bolt.current?.material as THREE.LineBasicMaterial | undefined;
+      if (off) off.opacity = 0;
+      return;
+    }
     if (t > next.current) {
       // a strike: main flash + scheduled flicker, then a long-ish gap
       strike((Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40);
@@ -364,6 +385,7 @@ export function Weather({
   gust = 0,
   windVec = [1, 0],
   storm = false,
+  budget = 1,
 }: {
   precip: Precip;
   intensity: number;
@@ -371,16 +393,21 @@ export function Weather({
   gust?: number;
   windVec?: [number, number];
   storm?: boolean;
+  /** 0..1 PerformanceMonitor budget — scales particle counts under load. */
+  budget?: number;
 }) {
   const flashRef = useRef(0);
+  const profile = useQualityProfile();
   const isRain = precip === "rain";
+  const rainMax = Math.max(80, Math.round(profile.rainMax * budget));
+  const snowMax = Math.max(60, Math.round(profile.snowMax * budget));
 
   return (
     <>
-      {precip === "snow" && <Snow intensity={intensity} wind={wind} gust={gust} windVec={windVec} />}
-      {isRain && <Rain intensity={intensity} wind={wind} gust={gust} windVec={windVec} />}
+      {precip === "snow" && <Snow intensity={intensity} wind={wind} gust={gust} windVec={windVec} max={snowMax} />}
+      {isRain && <Rain intensity={intensity} wind={wind} gust={gust} windVec={windVec} max={rainMax} />}
       <StormClouds active={isRain} flashRef={flashRef} wind={wind} gust={gust} windVec={windVec} />
-      {storm && <Lightning flashRef={flashRef} />}
+      <Lightning flashRef={flashRef} active={storm} />
     </>
   );
 }

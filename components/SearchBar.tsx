@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import gsap from "gsap";
 import { SearchIcon, StarIcon } from "./Icons";
+import { useI18n, type MsgKey } from "@/lib/i18n";
 
 export type SearchResult = {
   index: number;
@@ -26,6 +27,7 @@ export default function SearchBar({
   onActive: (index: number) => void;
   onSelect: (result: SearchResult) => void;
 }) {
+  const { t } = useI18n();
   const [focused, setFocused] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -156,7 +158,7 @@ export default function SearchBar({
                 inputRef.current?.blur();
               }
             }}
-            placeholder="Search a house"
+            placeholder={t("search.placeholder")}
             className="relative h-11 w-full bg-transparent pl-11 pr-4 text-sm font-medium text-white placeholder-white/38 outline-none"
           />
         </div>
@@ -202,9 +204,9 @@ export default function SearchBar({
                     <span className="min-w-0">
                       <span className="block truncate text-sm font-semibold">{result.name}</span>
                       <span className="mt-0.5 block truncate text-[11px] text-white/38">
-                        House {result.index + 1}
-                        {result.tier ? ` · ${result.tier}` : ""}
-                        {result.contributor ? " · contributor" : ""}
+                        {t("search.house")} {result.index + 1}
+                        {result.tier ? ` · ${t(("tier." + result.tier) as MsgKey)}` : ""}
+                        {result.contributor ? ` · ${t("search.contributor")}` : ""}
                       </span>
                     </span>
                     <span
@@ -221,14 +223,14 @@ export default function SearchBar({
               })}
             </div>
             <div className="relative border-t border-white/10 px-3 py-2 text-[10px] font-medium uppercase tracking-[0.16em] text-white/32">
-              Tab cycles · Enter selects
+              {t("search.hint")}
             </div>
           </div>
         )}
 
         {focused && results.length === 0 && (
           <div className="absolute left-0 right-0 top-[calc(100%+8px)] rounded-2xl border border-white/10 bg-[#0a100d]/82 px-4 py-3 text-center text-xs text-white/45 shadow-xl shadow-black/40 backdrop-blur-2xl">
-            No houses found
+            {t("search.empty")}
           </div>
         )}
       </div>

@@ -37,3 +37,17 @@ export function buildLantern(
   inner.position.set(-center.x, -box.min.y, -center.z);
   return g;
 }
+
+/**
+ * Update a built lantern's glow WITHOUT rebuilding it. Rebuilding clones the
+ * whole model + materials (heavy, GC churn) — day/night changes must only
+ * touch emissiveIntensity.
+ */
+export function setLanternGlow(lantern: THREE.Object3D, intensity: number): void {
+  lantern.traverse((o) => {
+    if (o instanceof THREE.Mesh) {
+      const m = o.material as THREE.MeshStandardMaterial;
+      if (m?.emissive) m.emissiveIntensity = intensity;
+    }
+  });
+}

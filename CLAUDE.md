@@ -68,6 +68,72 @@ Bucket `rarityScore` into tiers (drop-rate / threshold table to be finalized):
 - Tiers should be **deterministic** per user (same stargazer always gets the same house) — seed any
   randomness (e.g. house position/variant) from the user id.
 
+## Real Astronomy (sun & moon) — 2026-07
+
+> **IMPLEMENTED.** `lib/astro.ts` computes REAL solar + lunar az/el (Meeus/NOAA low-precision,
+> suncalc-family formulas) and moon illumination for the location in `lib/location.ts`
+> (single source, re-exported from `lib/weather.ts`). `sceneFromWeather` builds a timezone-correct
+> UTC instant (`zonedDate`, Intl-offset trick, DST-safe) from the weather reading's local wall time
+> and derives `sunPos`, `dayFactor` (civil-twilight ramp over sin(elevation)), `twilight` (warm
+> −6°..+8° band) and `moon.pos/phase/illumination` from it. Verified against real Sterzing
+> ephemeris (sunrise/sunset within ~2 min of Open-Meteo's `daily=sunrise,sunset`, which the API
+> route now also forwards along with `is_day` + `minute`). Live mode re-reads the wall clock every
+> 60 s (`timeTick` in `page.tsx`) so the sun actually moves between weather refreshes; manual mode
+> drives the same astro path. The moon billboard (`NightSky.tsx`) sits in WORLD space (parent group
+> follows only `camera.position` — never rotate it by `camera.quaternion`, that was the
+> moon-follows-camera bug), is lit by the real sun direction (phase + limb tilt fall out of the
+> geometry, earthshine on the dark side) and samples the NASA LROC albedo texture
+> (`public/textures/moon_albedo_1k.jpg`, public domain, credited in CREDITS.md) with a procedural
+> fallback. The key light in `SceneRig.tsx` clamps its Y so a below-horizon sun never lights from
+> underneath; the sky dome (`Sky.tsx`) keys its warm band off `params.twilight`.
+>
+> **Physical sky (2026-07):** `Sky.tsx` is a Preetham-style single-scattering dome (Rayleigh+Mie,
+> per-pixel analytic — no raymarch) with a real-scale sun disc, weather flattening (overcast/storm
+> uniforms) and a moonlit-Rayleigh night term. `lib/skyColor.ts` is the EXACT JS mirror of that
+> shader: `sceneFromWeather` samples it for fog/background/hemisphere colors and uses
+> `sunTransmittance` for the sun light color, so every surface reads from ONE atmosphere — never
+> hand-pick sky/fog hex values again. Turbidity/Mie are derived from live humidity/cloud/rain.
+> The JS samples are PRE-tonemap linear (fog blends before ACES); moon apparent size comes from the
+> real Earth–Moon distance (constant vs phase, slight supermoon swell), stars get horizon
+> extinction, the moon disc reddens/dims near the horizon (`uWarm`).
+
+## Graphics Quality Tiers — `lib/quality.ts`
+
+> **IMPLEMENTED.** ALL performance knobs live in `QUALITY_PROFILES` (low/medium/high/**extreme**):
+> DPR ranges, antialias, cloud layers + raymarch steps, shadow map size/type (512→4096, PCFSoft on
+> extreme), grass/canopy density (`sprigDensity`), flora/particle/firefly/falling-leaf counts, ant
+> counts + `antMixerStride` (low tier updates skinned mixers every 2nd frame — biggest CPU win).
+> Components read the active profile via `useQualityProfile()` (React context provided inside the
+> Canvas in `Experience.tsx`) — never hardcode counts in components. Auto-detect never resolves to
+> "extreme" (opt-in only). `PerformanceMonitor` degrades DPR + cloud quality + a particle `budget`
+> passed to `Weather`. The Canvas remounts on tier change (`key={graphicsQuality}`).
+
+## HUD / Menu (wood theme) — 2026-07
+
+> **IMPLEMENTED.** The HUD is themed as cut wood: `components/TrunkRings.tsx` (procedural seeded
+> annual-rings SVG + `WOOD` palette) backs the CENTERED main menu (`SettingsMenu.tsx` — opened by
+> Esc or by clicking the top-right clock; there is NO gear icon by owner request. Tabs Settings /
+> Credits / Language; the star count + stargazer sync live INSIDE the settings tab, not as a
+> bottom-left pill — `Hud.tsx` was deleted). `Clock.tsx` (top-right, self-ticking, real Gossensass
+> time + sunrise/sunset, state NEVER in page.tsx so the Canvas doesn't re-render per tick) is the
+> only element up there. `RotateControls.tsx` (bottom-right pad ◀▶▲▼ + all four arrow keys:
+> left/right orbit, up/down tilt, Shift = faster) writes to the module-level `lib/cameraBus.ts`;
+> `CameraRotateDriver` in `Experience.tsx` reads it per frame — orbit mode only, fly mode owns the
+> keys. ONE Escape hierarchy lives in `page.tsx`
+> (memorial → house panel → menu toggle; skipped in fly mode / text inputs) — do not add component-
+> level Escape listeners. i18n: `lib/i18n.tsx` (DE/EN/IT dictionaries, typed keys, localStorage
+> `star-tree-locale`, browser-language detect); MemorialSecret stays German by design. Credits are
+> parsed server-side from `CREDITS.md` by `/api/credits` per the contract below.
+
+## Visual QA (2026-07)
+
+> `?hour=21&sky=storm&day=3&month=7` on the page URL forces manual weather — used for QA and the
+> headless visual tests. Playwright (devDependency) drives the system Chrome headless with
+> SwiftShader to screenshot live scenes and menu interactions (scripts live in the session
+> scratchpad; pattern: goto with query params → wait for the fly-button text → keyboard Escape for
+> the menu → evaluate/click → screenshot). The offline sky-truth renderer samples
+> `lib/skyColor.ts` + ACES directly into PPM/PNG — colors there are EXACTLY the dome shader.
+
 ## Location & Live Weather — Sterzing (Vipiteno), South Tyrol, Italy
 
 > **IMPLEMENTED (first pass).** `/api/weather` fetches live Open-Meteo data for Sterzing;

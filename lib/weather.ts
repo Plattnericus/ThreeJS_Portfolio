@@ -3,13 +3,17 @@
 // shape so render components never need a separate fake-weather path.
 
 import * as THREE from "three";
+import { GOSSENSASS } from "./location";
+import {
+  moonIllumination,
+  moonPosition,
+  sceneDirection,
+  sunPosition,
+  zonedDate,
+} from "./astro";
+import { linearToHex, sampleSky, sunTransmittance, type Atmosphere } from "./skyColor";
 
-export const GOSSENSASS = {
-  lat: 46.93857,
-  lon: 11.44245,
-  tz: "Europe/Rome",
-  place: "Gossensass / Colle Isarco, Gemeinde Brenner",
-};
+export { GOSSENSASS };
 
 export type Precip = "none" | "rain" | "snow";
 export type Sky = "clear" | "clouds" | "fog" | "rain" | "snow" | "storm";
@@ -33,11 +37,15 @@ export type Weather = {
   cloudHigh: number; // 0..1
   visibilityM: number;
   hour: number; // 0..24 local
+  minute?: number; // 0..59 local
   month?: number; // 0..11 (drives season); omitted = use today
   day?: number; // 1..31
   year?: number;
   sky: Sky;
   live: boolean;
+  isDay?: boolean; // Open-Meteo is_day, cross-check/display only
+  sunrise?: string; // ISO local time from Open-Meteo daily
+  sunset?: string;
 };
 
 export type CloudLayerParams = {
@@ -92,6 +100,9 @@ export type SceneParams = {
   precip: Precip;
   precipIntensity: number; // 0..1
   dayFactor: number; // 0 night .. 1 noon
+  sunElevationDeg: number; // real solar elevation, negative below horizon
+  twilight: number; // 0..1, peaks while the sun crosses the horizon
+  atmosphere: Atmosphere; // physical sky model inputs (see lib/skyColor.ts)
   season: Season;
   leafColor: string; // seasonal foliage tint
   snow: number; // 0..1 accumulation on surfaces
@@ -118,7 +129,7 @@ export function seasonFromMonth(month: number): Season {
 
 const LEAF_COLOR: Record<Season, string> = {
   spring: "#92d64e",
-  summer: "#67bd38",
+  summer: "#6fc73e",
   autumn: "#e0892f",
   winter: "#9fb0a6",
 };
@@ -151,59 +162,81 @@ export function windVectorFromDirection(fromDeg: number | undefined): [number, n
   return [x / len, z / len];
 }
 
-function sunFromHour(hour: number): { pos: [number, number, number]; day: number } {
-  const t = clamp((hour - 5.5) / 14, 0, 1);
-  const elev = Math.sin(t * Math.PI);
-  const day = clamp(elev, 0, 1);
-  const az = lerp(-1, 1, t);
-  return { pos: [az * 30, 6 + elev * 28, 14], day };
+// Distances from the origin for the celestial light anchors. The moon sits
+// just inside the star sphere (radius 96 in NightSky) so it draws in front of
+// the stars but behind everything else.
+const SUN_DISTANCE = 40;
+const MOON_DISTANCE = 88;
+
+// dayFactor ramp over real solar elevation: 0 at civil-twilight end (-6°),
+// ~0.17 right at sunrise, 1 once the sun is 30°+ up. A low winter noon stays a
+// touch dimmer than high summer — that's real light, keep it.
+const SIN_TWILIGHT_END = Math.sin(-6 * THREE.MathUtils.DEG2RAD);
+const SIN_FULL_DAY = Math.sin(30 * THREE.MathUtils.DEG2RAD);
+
+/** UTC instant for the weather reading's local wall time. */
+function sceneDate(w: Weather): Date {
+  const now = new Date();
+  const year = Math.trunc(finite(w.year, now.getFullYear()));
+  const month = Math.trunc(finite(w.month, now.getMonth()));
+  const day = Math.trunc(finite(w.day, now.getDate()));
+  const hour =
+    clamp(finite(w.hour, now.getHours()), 0, 24) +
+    clamp(finite(w.minute, 0), 0, 59) / 60;
+  return zonedDate(year, month, day, hour, GOSSENSASS.tz);
 }
 
-function dateParts(w: Weather): { year: number; month: number; day: number } {
-  const now = new Date();
+function sunFromDate(date: Date): {
+  pos: [number, number, number];
+  day: number;
+  elevationDeg: number;
+  twilight: number;
+} {
+  const { azimuth, altitude } = sunPosition(date, GOSSENSASS.lat, GOSSENSASS.lon);
+  const dir = sceneDirection(azimuth, altitude);
+  const sinEl = Math.sin(altitude);
+  const day = clamp((sinEl - SIN_TWILIGHT_END) / (SIN_FULL_DAY - SIN_TWILIGHT_END), 0, 1);
+  // Warm dawn/dusk band while the sun crosses the horizon (-6°..+8°).
+  const rise = THREE.MathUtils.smoothstep(altitude, -0.105, -0.005);
+  const fade = 1 - THREE.MathUtils.smoothstep(altitude, 0.02, 0.14);
+  const twilight = clamp(rise * fade, 0, 1);
   return {
-    year: Math.trunc(finite(w.year, now.getFullYear())),
-    month: Math.trunc(finite(w.month, now.getMonth())),
-    day: Math.trunc(finite(w.day, now.getDate())),
+    pos: [dir[0] * SUN_DISTANCE, dir[1] * SUN_DISTANCE, dir[2] * SUN_DISTANCE],
+    day,
+    elevationDeg: altitude * THREE.MathUtils.RAD2DEG,
+    twilight,
   };
 }
 
-function moonPhase(year: number, month: number, day: number): number {
-  // Astronomical constants: known new moon epoch + mean synodic month.
-  const synodicMonth = 29.530588853;
-  const newMoonEpoch = Date.UTC(2000, 0, 6, 18, 14);
-  const localNoon = Date.UTC(year, month, day, 12, 0);
-  const days = (localNoon - newMoonEpoch) / 86400000;
-  return ((days / synodicMonth) % 1 + 1) % 1;
-}
-
-function moonFromDateAndHour(
-  year: number,
-  month: number,
+function moonFromDate(
+  date: Date,
   day: number,
-  hour: number,
   cloudShadow: number,
   fog: number,
   rainMood: number,
 ): SceneParams["moon"] {
-  const phase = moonPhase(year, month, day);
-  const illumination = clamp((1 - Math.cos(phase * Math.PI * 2)) * 0.5, 0, 1);
-  // Approximation: new moon tracks the sun, full moon transits at midnight.
-  const transitHour = (12 + phase * 24) % 24;
-  const delta = ((((hour - transitHour + 36) % 24) - 12) / 12);
-  const aboveHorizon = Math.abs(delta) <= 1 ? Math.cos(delta * Math.PI * 0.5) : 0;
-  const x = delta * 42;
-  const y = 6 + aboveHorizon * 15;
-  const z = -82 + Math.sin(phase * Math.PI * 2) * 12;
+  const mp = moonPosition(date, GOSSENSASS.lat, GOSSENSASS.lon);
+  const ill = moonIllumination(date);
+  const dir = sceneDirection(mp.azimuth, mp.altitude);
+  // Fade in just past the horizon instead of popping.
+  const aboveHorizon = clamp((Math.sin(mp.altitude) - 0.01) / 0.08, 0, 1);
   const weatherVisibility = clamp(1 - cloudShadow * 0.72 - fog * 0.85 - rainMood * 0.7, 0, 1);
-  const visible = clamp(aboveHorizon * weatherVisibility * (0.18 + illumination * 0.82), 0, 1);
+  // A daytime moon exists but reads as a faint ghost, not a bright disc.
+  const daylightFade = lerp(1, 0.16, day);
+  const visible = clamp(
+    aboveHorizon * weatherVisibility * daylightFade * (0.18 + ill.fraction * 0.82),
+    0,
+    1,
+  );
 
   return {
-    pos: [x, y, z],
-    phase,
-    illumination,
+    pos: [dir[0] * MOON_DISTANCE, dir[1] * MOON_DISTANCE, dir[2] * MOON_DISTANCE],
+    phase: ill.phase,
+    illumination: ill.fraction,
     visible,
-    size: lerp(5.2, 7.0, illumination),
+    // Real behavior: the apparent size never changes with phase — only with
+    // the actual Earth–Moon distance (slightly larger at perigee, "supermoon").
+    size: 3.3 * (385000 / Math.max(1, mp.distanceKm)),
   };
 }
 
@@ -230,8 +263,8 @@ function cloudLayer(
 
 /** Build realistic scene params from a weather reading. */
 export function sceneFromWeather(w: Weather): SceneParams {
-  const { pos, day } = sunFromHour(w.hour);
-  const parts = dateParts(w);
+  const date = sceneDate(w);
+  const { pos, day, elevationDeg, twilight } = sunFromDate(date);
   const humidity = finite(w.humidity, 55);
   const visibilityM = Math.max(100, finite(w.visibilityM, 40000));
   const totalCloud = clamp(finite(w.cloud, 0.2), 0, 1);
@@ -274,38 +307,91 @@ export function sceneFromWeather(w: Weather): SceneParams {
   const season = seasonFromMonth(w.month ?? new Date().getMonth());
   const snow = snowy ? 0.9 : season === "winter" ? 0.35 : 0;
 
-  const nightSky = new THREE.Color("#111827");
-  const daySky = new THREE.Color("#7cbde4");
-  const overcast = new THREE.Color("#9fa8ad");
-  const rainSky = new THREE.Color(w.sky === "storm" ? "#283044" : "#5f7180");
-  let sky = nightSky.clone().lerp(daySky, day);
-  sky.lerp(overcast, clamp(totalCloud * 0.52 + fog * 0.38, 0, 0.86));
   const rainMood = rainy ? clamp(0.42 + precipIntensity * 0.45 + (w.sky === "storm" ? 0.18 : 0), 0, 0.95) : 0;
-  sky.lerp(rainSky, rainMood);
-
   const cloudShadow = clamp(totalCloud * 0.58 + lowCloud * 0.22 + fog * 0.35 + rainMood * 0.28, 0, 0.98);
-  const sunIntensity = lerp(0.12, 2.05, day) * lerp(1, 0.36, cloudShadow) * lerp(1, 0.68, rainMood);
-  const sunColor = day < 0.25 ? "#ffb27a" : cloudShadow > 0.62 ? "#d4d8dc" : "#fff1d4";
-  const night = clamp(1 - THREE.MathUtils.smoothstep(day, 0.02, 0.28), 0, 1);
+  // Cinematic golden hour: the low sun rakes the scene a touch harder.
+  const sunIntensity =
+    lerp(0.12, 2.05, day) *
+    (1 + twilight * 0.45) *
+    lerp(1, 0.36, cloudShadow) *
+    lerp(1, 0.68, rainMood);
+  // Stars should be gone by the end of civil twilight, well before sunrise.
+  const night = clamp(1 - THREE.MathUtils.smoothstep(day, 0.01, 0.16), 0, 1);
   const starsIntensity = clamp(
     night * (1 - cloudShadow * 0.92) * (1 - fog * 0.9) * (1 - rainMood * 0.82),
     0,
     1,
   );
-  const moon = moonFromDateAndHour(parts.year, parts.month, parts.day, w.hour, cloudShadow, fog, rainMood);
+  const moon = moonFromDate(date, day, cloudShadow, fog, rainMood);
+
+  // Physical atmosphere: the weather drives haze/aerosols the way it does in
+  // real life (humid = milkier, overcast = flat gray, storm = slate).
+  const humidity01 = clamp(humidity / 100, 0, 1);
+  const atmosphere: Atmosphere = {
+    turbidity: clamp(1.6 + humidity01 * 1.6 + totalCloud * 5 + fog * 6 + rainMood * 3, 1.4, 14),
+    rayleigh: 3.0 + (finite(w.tempC, 12) < 2 ? 0.35 : 0),
+    mieCoefficient: clamp(
+      0.003 + humidity01 * 0.003 + totalCloud * 0.008 + rainMood * 0.012 + fog * 0.014,
+      0.002,
+      0.04,
+    ),
+    mieDirectionalG: 0.8,
+    // Calibrated so ACES(x · toneMappingExposure/0.6) matches the reference
+    // three.js Sky look (renderer exposure 0.5): 0.45 · (1.12/0.6) ≈ 0.83.
+    exposure: 0.19,
+    overcast: clamp(cloudShadow * 0.85, 0, 0.92),
+    moodMix: rainMood * 0.75,
+    moodColor: w.sky === "storm" ? [0.16, 0.19, 0.26] : [0.35, 0.42, 0.48],
+    // Tuned so a clear full-moon night reads as a faint silver-blue glow
+    // (real moonlight is ~1/400k of sunlight; this is gently exaggerated).
+    moonE: moon.visible * (0.25 + moon.illumination * 0.75) * clamp(1 - day * 2, 0, 1) * 4.5,
+  };
+
+  // Fog/background/light colors are SAMPLED FROM THE SAME ATMOSPHERE the dome
+  // shader renders, so everything always matches the visible sky.
+  const sunDirUnit = new THREE.Vector3(pos[0], pos[1], pos[2]).normalize();
+  const moonDirUnit = new THREE.Vector3(moon.pos[0], moon.pos[1], moon.pos[2]).normalize();
+  const horizonDir = new THREE.Vector3(-sunDirUnit.z, 0.05, sunDirUnit.x).normalize();
+  const skyDir = new THREE.Vector3(sunDirUnit.x * 0.22, 0.72, sunDirUnit.z * 0.22).normalize();
+  const fogCol = sampleSky(horizonDir, sunDirUnit, moonDirUnit, atmosphere);
+  const skyCol = sampleSky(skyDir, sunDirUnit, moonDirUnit, atmosphere);
+  // Direct sunlight color = atmospheric transmittance (white at noon, amber at
+  // the horizon), pulled toward neutral gray under heavy cloud.
+  const sunColor = linearToHex(
+    sunTransmittance(sunDirUnit, atmosphere).lerp(
+      new THREE.Color("#d4d8dc"),
+      clamp(cloudShadow * 0.7, 0, 0.8),
+    ),
+  );
 
   const fogNear = lerp(55, 13, fog);
   const fogFar = lerp(135, 42, fog);
-  const cloudBase = new THREE.Color("#f2f0e9").lerp(new THREE.Color("#c8ced1"), cloudShadow * 0.62);
-  const cloudShade = new THREE.Color("#8d969e").lerp(new THREE.Color("#46505a"), clamp(totalCloud * 0.7 + fog * 0.35, 0, 1));
+  // Clouds catch the low sun: golden/pink undersides at dawn and dusk, and
+  // they dim toward night instead of staying paper-white.
+  const cloudBase = new THREE.Color("#f2f0e9")
+    .lerp(new THREE.Color("#c8ced1"), cloudShadow * 0.62)
+    .lerp(new THREE.Color(sunColor), twilight * 0.55)
+    .multiplyScalar(lerp(0.32, 1, clamp(day * 2.4 + twilight * 0.4, 0, 1)));
+  const cloudShade = new THREE.Color("#8d969e")
+    .lerp(new THREE.Color("#46505a"), clamp(totalCloud * 0.7 + fog * 0.35, 0, 1))
+    .lerp(new THREE.Color(sunColor), twilight * 0.22)
+    .multiplyScalar(lerp(0.35, 1, clamp(day * 2.4 + twilight * 0.3, 0, 1)));
+  // Foliage warms in the golden hour (sunlit leaves read amber in real life).
+  const leafColor =
+    "#" +
+    new THREE.Color(LEAF_COLOR[season])
+      .lerp(new THREE.Color("#d8a24a"), twilight * 0.28)
+      .getHexString();
 
   return {
     sunPos: pos,
     sunIntensity,
     sunColor,
-    ambient: (lerp(0.25, 0.62, day) + totalCloud * 0.06) * lerp(1, 0.72, rainMood),
-    skyColor: "#" + sky.getHexString(),
-    fogColor: "#" + sky.clone().lerp(new THREE.Color(rainy ? "#31404a" : "#ffffff"), rainy ? 0.18 : 0.08).getHexString(),
+    // The physical sky color is brighter than the old artistic hex values, so
+    // the hemisphere intensity is scaled down to keep the same light energy.
+    ambient: (lerp(0.12, 0.36, day) + totalCloud * 0.05) * lerp(1, 0.72, rainMood),
+    skyColor: linearToHex(skyCol),
+    fogColor: linearToHex(fogCol),
     fogNear,
     fogFar,
     wind,
@@ -317,8 +403,11 @@ export function sceneFromWeather(w: Weather): SceneParams {
     precip,
     precipIntensity,
     dayFactor: day,
+    sunElevationDeg: elevationDeg,
+    twilight,
+    atmosphere,
     season,
-    leafColor: LEAF_COLOR[season],
+    leafColor,
     snow,
     cloud: totalCloud,
     clouds: {
@@ -397,11 +486,15 @@ export function weatherFromApiPayload(payload: Record<string, unknown>): Weather
     cloudHigh: clamp(finite(payload.cloudHigh as number | undefined, 0.2), 0, 1),
     visibilityM: finite(payload.visibilityM as number | undefined, 40000),
     hour: finite(payload.hour as number | undefined, 12),
+    minute: finite(payload.minute as number | undefined, 0),
     month: finite(payload.month as number | undefined, new Date().getMonth()),
     day: finite(payload.day as number | undefined, new Date().getDate()),
     year: finite(payload.year as number | undefined, new Date().getFullYear()),
     sky: (typeof payload.sky === "string" ? payload.sky : "clear") as Sky,
     live: Boolean(payload.live),
+    isDay: typeof payload.isDay === "boolean" ? payload.isDay : undefined,
+    sunrise: typeof payload.sunrise === "string" ? payload.sunrise : undefined,
+    sunset: typeof payload.sunset === "string" ? payload.sunset : undefined,
   };
 }
 

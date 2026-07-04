@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import type { SurfaceProfile } from "@/lib/surface";
+import { useQualityProfile } from "@/lib/quality";
 
 const TMP = new THREE.Object3D();
 // Soft, natural meadow-flower colours.
@@ -101,8 +102,7 @@ export function Flora({
   const bushRef = useRef<THREE.InstancedMesh>(null);
   const bloomRef = useRef<THREE.InstancedMesh>(null);
   const stemRef = useRef<THREE.InstancedMesh>(null);
-  const BUSHES = 130;
-  const FLOWERS = 320;
+  const { bushes: BUSHES, flowers: FLOWERS } = useQualityProfile();
 
   useEffect(() => {
     const bush = bushRef.current;
@@ -146,7 +146,7 @@ export function Flora({
       stem.instanceMatrix.needsUpdate = true;
       if (bloom.instanceColor) bloom.instanceColor.needsUpdate = true;
     }
-  }, [radius, topY, surface]);
+  }, [radius, topY, surface, BUSHES, FLOWERS]);
 
   return (
     <group>

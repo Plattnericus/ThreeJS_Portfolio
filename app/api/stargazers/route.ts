@@ -1,13 +1,72 @@
 import { NextResponse } from "next/server";
+import { promises as fs } from "fs";
+import os from "os";
+import path from "path";
 import type { Stargazer } from "@/lib/stargazers";
 import { tierFromProfile } from "@/lib/rarity";
 
 const REPO = process.env.GITHUB_REPO ?? "Plattnericus/ThreeJS_Portfolio";
 const ENRICH = 30; // how many stargazers to enrich with a profile fetch
 
-// Visitors drive freshness: the client calls this route on page load and then
-// every 5 minutes. No cron job is required.
+// ---- STRICT rate-limit protection -------------------------------------------
+// GitHub is contacted AT MOST once per CACHE_MS, no matter how many visitors,
+// tabs or reloads hit this route:
+//   1. In-memory payload cache (5 min) — fresh hits never touch GitHub.
+//   2. In-flight coalescing — concurrent requests share ONE refresh.
+//   3. Next data cache on every GitHub fetch (revalidate) as a second layer
+//      that also survives serverless instance swaps.
+//   4. Rate-limit/error responses serve the LAST GOOD payload (stale is far
+//      better than demo) and back off before retrying.
+//   5. Without a GITHUB_TOKEN only 60 req/h are allowed — then contributor +
+//      profile enrichment is SKIPPED so a refresh costs 2 calls (24/h max).
+// Budget with token: ~33 calls per refresh × 12/h ≈ 400/h of 5000. Without
+// token: 2 × 12 = 24/h of 60. Both safely inside the limits.
+const CACHE_MS = 5 * 60 * 1000;
+const ERROR_RETRY_MS = 60 * 1000; // don't hammer GitHub after a failure
 export const dynamic = "force-dynamic";
+
+type Payload = {
+  repo: string;
+  stars: number;
+  live: boolean;
+  stargazers: Stargazer[] | null;
+  fetchedAt: number;
+};
+
+// Module-level state survives across requests within a server instance.
+const state: {
+  cached: Payload | null;
+  lastGood: Payload | null;
+  nextAttempt: number;
+  inflight: Promise<Payload> | null;
+  diskChecked: boolean;
+} = { cached: null, lastGood: null, nextAttempt: 0, inflight: null, diskChecked: false };
+
+// Persistent layer: the payload is also written to disk so the cache SURVIVES
+// server restarts, dev hot-reloads (which reset module state!) and serverless
+// cold starts — a fresh process serves from disk instead of hitting GitHub.
+const CACHE_FILE = path.join(os.tmpdir(), "star-tree-stargazers-cache.json");
+
+async function readDiskCache(): Promise<Payload | null> {
+  try {
+    const raw = await fs.readFile(CACHE_FILE, "utf8");
+    const p = JSON.parse(raw) as Payload;
+    return typeof p?.fetchedAt === "number" && typeof p?.stars === "number" ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeDiskCache(p: Payload) {
+  fs.writeFile(CACHE_FILE, JSON.stringify(p)).catch(() => {
+    /* disk cache is best-effort */
+  });
+}
+
+// Enriched profiles barely change — remember them for an hour so refreshes
+// don't re-fetch the same 30 users.
+const profileCache = new Map<string, { at: number; data: Partial<Stargazer> }>();
+const PROFILE_MS = 60 * 60 * 1000;
 
 function ghHeaders(accept = "application/vnd.github+json") {
   const h: Record<string, string> = {
@@ -19,114 +78,184 @@ function ghHeaders(accept = "application/vnd.github+json") {
   return h;
 }
 
-function json(data: unknown) {
+function json(data: Payload) {
   return NextResponse.json(data, {
     headers: {
-      "Cache-Control": "no-store, max-age=0",
+      // CDN caches the payload for 5 min too (third protective layer); the
+      // browser itself revalidates so the client-side 5-min timer stays exact.
+      "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=600",
     },
   });
 }
 
-export async function GET() {
+function demoPayload(): Payload {
+  return {
+    repo: REPO,
+    stars: Number(process.env.DEMO_STARS ?? 0),
+    live: false,
+    stargazers: null,
+    fetchedAt: Date.now(),
+  };
+}
+
+function rateLimited(res: Response): boolean {
+  if (res.status === 429) return true;
+  return res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0";
+}
+
+async function fetchFromGitHub(): Promise<Payload> {
+  const authed = Boolean(process.env.GITHUB_TOKEN);
+
+  // 1) repo info → star count + existence
+  const repoRes = await fetch(`https://api.github.com/repos/${REPO}`, {
+    headers: ghHeaders(),
+    next: { revalidate: 300 },
+  });
+  if (rateLimited(repoRes)) throw new Error("rate-limited");
+  if (!repoRes.ok) throw new Error(`repo ${repoRes.status}`);
+  const repo = await repoRes.json();
+  const stars: number = repo.stargazers_count ?? 0;
+
+  // 2) stargazers (login + avatar), earliest first.
+  const sgRes = await fetch(
+    `https://api.github.com/repos/${REPO}/stargazers?per_page=40`,
+    {
+      headers: ghHeaders("application/vnd.github.star+json"),
+      next: { revalidate: 300 },
+    },
+  );
+  if (rateLimited(sgRes)) throw new Error("rate-limited");
+  let stargazers: Stargazer[] | null = null;
+  if (sgRes.ok) {
+    const arr = await sgRes.json();
+    stargazers = (Array.isArray(arr) ? arr : [])
+      .map((e: any) => e.user ?? e)
+      .filter((u: any) => u && u.login)
+      .map((u: any) => ({
+        login: u.login,
+        avatarUrl: u.avatar_url,
+        profileUrl: u.html_url,
+      }));
+  }
+
+  // Unauthenticated: stop here. 2 calls per refresh keeps us far below the
+  // 60/h anonymous limit; tiers fall back to the deterministic client seed.
+  if (!authed) {
+    return { repo: REPO, stars, live: true, stargazers, fetchedAt: Date.now() };
+  }
+
+  // 3) contributors → who worked on the repo + their commit counts.
+  const commitsByLogin = new Map<string, number>();
   try {
-    // 1) repo info → star count + existence
-    const repoRes = await fetch(`https://api.github.com/repos/${REPO}`, {
-      headers: ghHeaders(),
-      cache: "no-store",
-    });
-    if (!repoRes.ok) {
-      const demo = Number(process.env.DEMO_STARS ?? 0);
-      return json({
-        repo: REPO,
-        stars: demo,
-        live: false,
-        stargazers: null,
-        fetchedAt: Date.now(),
-      });
-    }
-    const repo = await repoRes.json();
-    const stars: number = repo.stargazers_count ?? 0;
-
-    // 2) stargazers (login + avatar), earliest first.
-    const sgRes = await fetch(
-      `https://api.github.com/repos/${REPO}/stargazers?per_page=40`,
-      {
-        headers: ghHeaders("application/vnd.github.star+json"),
-        cache: "no-store",
-      },
+    const cRes = await fetch(
+      `https://api.github.com/repos/${REPO}/contributors?per_page=100`,
+      { headers: ghHeaders(), next: { revalidate: 300 } },
     );
-    let stargazers: Stargazer[] | null = null;
-    if (sgRes.ok) {
-      const arr = await sgRes.json();
-      stargazers = (Array.isArray(arr) ? arr : [])
-        .map((e: any) => e.user ?? e)
-        .filter((u: any) => u && u.login)
-        .map((u: any) => ({
-          login: u.login,
-          avatarUrl: u.avatar_url,
-          profileUrl: u.html_url,
-        }));
-    }
-
-    // 3) contributors → who worked on the repo + their commit counts.
-    const commitsByLogin = new Map<string, number>();
-    try {
-      const cRes = await fetch(
-        `https://api.github.com/repos/${REPO}/contributors?per_page=100`,
-        { headers: ghHeaders(), cache: "no-store" },
-      );
-      if (cRes.ok) {
-        const list = await cRes.json();
-        for (const c of Array.isArray(list) ? list : []) {
-          if (c?.login) commitsByLogin.set(c.login.toLowerCase(), c.contributions ?? 0);
-        }
+    if (cRes.ok) {
+      const list = await cRes.json();
+      for (const c of Array.isArray(list) ? list : []) {
+        if (c?.login) commitsByLogin.set(c.login.toLowerCase(), c.contributions ?? 0);
       }
-    } catch {
-      /* contributors optional */
     }
+  } catch {
+    /* contributors optional */
+  }
 
-    // 4) enrich each stargazer with their profile → compute the REAL tier.
-    if (stargazers && stargazers.length) {
-      const slice = stargazers.slice(0, ENRICH);
-      await Promise.all(
-        slice.map(async (sg) => {
-          try {
-            const uRes = await fetch(`https://api.github.com/users/${sg.login}`, {
-              headers: ghHeaders(),
-              cache: "no-store",
-            });
-            const u = uRes.ok ? await uRes.json() : {};
-            const commits = commitsByLogin.get(sg.login.toLowerCase()) ?? 0;
-            const ageYears = u.created_at
-              ? (Date.now() - new Date(u.created_at).getTime()) / 3.15576e10
-              : 0;
-            sg.followers = u.followers ?? 0;
-            sg.commits = commits;
-            sg.contributor = commits > 0;
-            sg.tier = tierFromProfile({
+  // 4) enrich each stargazer with their profile → compute the REAL tier.
+  //    Profiles are memoized for an hour, so most refreshes cost 0 extra calls.
+  if (stargazers && stargazers.length) {
+    const slice = stargazers.slice(0, ENRICH);
+    await Promise.all(
+      slice.map(async (sg) => {
+        const hit = profileCache.get(sg.login.toLowerCase());
+        const commits = commitsByLogin.get(sg.login.toLowerCase()) ?? 0;
+        if (hit && Date.now() - hit.at < PROFILE_MS) {
+          Object.assign(sg, hit.data, {
+            commits,
+            contributor: commits > 0,
+          });
+          return;
+        }
+        try {
+          const uRes = await fetch(`https://api.github.com/users/${sg.login}`, {
+            headers: ghHeaders(),
+            next: { revalidate: 3600 },
+          });
+          const u = uRes.ok ? await uRes.json() : {};
+          const ageYears = u.created_at
+            ? (Date.now() - new Date(u.created_at).getTime()) / 3.15576e10
+            : 0;
+          const data: Partial<Stargazer> = {
+            followers: u.followers ?? 0,
+            tier: tierFromProfile({
               login: sg.login,
               followers: u.followers ?? 0,
               publicRepos: u.public_repos ?? 0,
               accountAgeYears: ageYears,
               isContributor: commits > 0,
               commits,
-            });
-          } catch {
-            /* leave tier undefined → client falls back to deterministic */
-          }
-        }),
-      );
-    }
+            }),
+          };
+          profileCache.set(sg.login.toLowerCase(), { at: Date.now(), data });
+          Object.assign(sg, data, { commits, contributor: commits > 0 });
+        } catch {
+          /* leave tier undefined → client falls back to deterministic */
+        }
+      }),
+    );
+  }
 
-    return json({ repo: REPO, stars, live: true, stargazers, fetchedAt: Date.now() });
+  return { repo: REPO, stars, live: true, stargazers, fetchedAt: Date.now() };
+}
+
+export async function GET() {
+  const now = Date.now();
+
+  // Cold start / hot-reload: hydrate module state from the disk cache first.
+  if (!state.cached && !state.diskChecked) {
+    state.diskChecked = true;
+    const disk = await readDiskCache();
+    if (disk && disk.live) {
+      state.cached = disk;
+      state.lastGood = disk;
+    }
+  }
+
+  // Fresh cache → GitHub is not touched at all.
+  if (state.cached && now - state.cached.fetchedAt < CACHE_MS) {
+    return json(state.cached);
+  }
+
+  // Back-off window after an error → serve the last good payload meanwhile.
+  if (now < state.nextAttempt) {
+    return json(state.lastGood ?? demoPayload());
+  }
+
+  // Coalesce: all concurrent requests share ONE GitHub refresh.
+  if (!state.inflight) {
+    state.inflight = fetchFromGitHub()
+      .then((payload) => {
+        state.cached = payload;
+        state.lastGood = payload;
+        state.nextAttempt = 0;
+        writeDiskCache(payload);
+        return payload;
+      })
+      .catch((err) => {
+        // Rate-limited or failed: keep serving the previous payload and wait
+        // before trying GitHub again.
+        state.nextAttempt = Date.now() + ERROR_RETRY_MS;
+        if (state.lastGood) return state.lastGood;
+        throw err;
+      })
+      .finally(() => {
+        state.inflight = null;
+      });
+  }
+
+  try {
+    return json(await state.inflight);
   } catch {
-    const demo = Number(process.env.DEMO_STARS ?? 0);
-    return json({
-      repo: REPO,
-      stars: demo,
-      live: false,
-      stargazers: null,
-      fetchedAt: Date.now(),
-    });
+    return json(demoPayload());
   }
 }

@@ -4,6 +4,7 @@ import { useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import type { SceneParams } from "@/lib/weather";
+import { useQualityProfile } from "@/lib/quality";
 
 // Owns background, fog and lights, and eases every value toward the target
 // SceneParams so weather/time changes fade smoothly instead of snapping.
@@ -15,6 +16,7 @@ export function SceneRig({
   shadowsActive?: boolean;
 }) {
   const { gl, scene } = useThree();
+  const quality = useQualityProfile();
   const hemi = useRef<THREE.HemisphereLight>(null);
   const dir = useRef<THREE.DirectionalLight>(null);
   const lastShadowUpdate = useRef(-1);
@@ -59,7 +61,12 @@ export function SceneRig({
       dir.current.intensity = c.sunI;
       c.sun.lerp(new THREE.Color(params.sunColor), k);
       dir.current.color.copy(c.sun);
-      c.pos.lerp(new THREE.Vector3(...params.sunPos), k);
+      // sunPos follows the real sun and dips below the horizon at night; the
+      // key light must never shine from underneath, so clamp its height.
+      c.pos.lerp(
+        new THREE.Vector3(params.sunPos[0], Math.max(params.sunPos[1], 2.5), params.sunPos[2]),
+        k,
+      );
       dir.current.position.copy(c.pos);
     }
     if (hemi.current) {
@@ -93,16 +100,17 @@ export function SceneRig({
         intensity={params.sunIntensity}
         color={params.sunColor}
         castShadow
-        shadow-mapSize={[1024, 1024]}
+        shadow-mapSize={[quality.shadowMapSize, quality.shadowMapSize]}
         shadow-camera-near={1}
         shadow-camera-far={70}
         shadow-camera-left={-18}
         shadow-camera-right={18}
         shadow-camera-top={30}
         shadow-camera-bottom={-16}
-        shadow-radius={4}
-        shadow-bias={-0.0004}
-        shadow-normalBias={0.03}
+        shadow-radius={7}
+        shadow-bias={-0.00035}
+        shadow-normalBias={0.035}
+        shadow-intensity={0.94}
       />
     </>
   );

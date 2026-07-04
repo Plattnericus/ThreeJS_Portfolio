@@ -9,7 +9,7 @@ import gsap from "gsap";
 import { TIER_BUILDING, TIER_SIZE, Tier, deckRadius, resolveTier } from "@/lib/rarity";
 import { MAX_HOUSES } from "@/lib/layout";
 import { sampleBranchAnchors, type Anchor } from "@/lib/branches";
-import { buildLantern, LANTERN_SIZE } from "@/lib/lantern";
+import { buildLantern, setLanternGlow, LANTERN_SIZE } from "@/lib/lantern";
 import { nameForIndex } from "@/lib/names";
 import type { Stargazer } from "@/lib/stargazers";
 
@@ -215,11 +215,15 @@ function House({
     return { building, platform, deckR, mats, la, lr };
   }, [tier, size, makeBuilding, i]);
 
-  // Lantern glow tracks day/night.
+  // Built ONCE — rebuilding clones the whole model per night change (lag).
   const lantern = useMemo(
-    () => buildLantern(lanternScene, LANTERN_SIZE, LANTERN_ROT, 0.2 + night * 2.2),
-    [lanternScene, night],
+    () => buildLantern(lanternScene, LANTERN_SIZE, LANTERN_ROT, 1),
+    [lanternScene],
   );
+  // Glow tracks day/night without any rebuild.
+  useEffect(() => {
+    setLanternGlow(lantern, 0.2 + night * 2.2);
+  }, [lantern, night]);
 
   // Hover → brighten (emissive) + a subtle scale pop, eased with GSAP.
   useEffect(() => {
@@ -281,11 +285,14 @@ function House({
         {built.building && <primitive object={built.building} position={[0, 0.04, 0]} />}
         <group position={[Math.cos(built.la) * built.lr, 0.04, Math.sin(built.la) * built.lr]}>
           <primitive object={lantern} />
-          {active && lightsOn && i < LIT_HOUSES && (
+          {/* ALWAYS mounted: toggling a light's existence changes the light
+              count and forces every standard material in the scene to
+              recompile (the day/night switch freeze). Intensity 0 is free. */}
+          {i < LIT_HOUSES && (
             <pointLight
               color="#ffb765"
               position={[0, size * 0.45, 0]}
-              intensity={6 * night}
+              intensity={active && lightsOn ? 6 * night : 0}
               distance={size * 4.5}
               decay={2}
             />
@@ -335,11 +342,16 @@ function ExtraDeckLanterns({
         i,
         angle: rand(i + 211) * Math.PI * 2,
         radius: r * (0.72 + rand(i + 33) * 0.18),
-        lantern: buildLantern(lanternScene, LANTERN_SIZE * 0.92, LANTERN_ROT, 0.25 + night * 2.6),
+        lantern: buildLantern(lanternScene, LANTERN_SIZE * 0.92, LANTERN_ROT, 1),
       });
     }
     return out;
-  }, [active, lanternScene, night, stargazers]);
+  }, [active, lanternScene, stargazers]);
+
+  // Glow tracks day/night without rebuilding the lantern clones.
+  useEffect(() => {
+    for (const item of items) setLanternGlow(item.lantern, 0.25 + night * 2.6);
+  }, [items, night]);
 
   useFrame((state) => {
     const t = state.clock.elapsedTime;
@@ -370,11 +382,12 @@ function ExtraDeckLanterns({
           }}
         >
           <primitive object={item.lantern} />
-          {lightsOn && k < EXTRA_LIT_LANTERNS && (
+          {/* Always mounted — see the LIT_HOUSES note (recompile-free). */}
+          {k < EXTRA_LIT_LANTERNS && (
             <pointLight
               color="#ffbd73"
               position={[0, 0.42, 0]}
-              intensity={4.8 * night}
+              intensity={lightsOn ? 4.8 * night : 0}
               distance={3.8}
               decay={2}
             />

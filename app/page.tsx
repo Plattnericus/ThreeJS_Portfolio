@@ -2,12 +2,15 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
-import Hud from "@/components/Hud";
-import SettingsMenu, {
+import SettingsMenu, { type ManualDate } from "@/components/SettingsMenu";
+import Clock from "@/components/Clock";
+import RotateControls from "@/components/RotateControls";
+import {
+  isGraphicsQuality,
   type GraphicsQuality,
-  type ManualDate,
-} from "@/components/SettingsMenu";
-import type { ResolvedGraphicsQuality } from "@/components/Experience";
+  type ResolvedGraphicsQuality,
+} from "@/lib/quality";
+import { I18nProvider, useI18n } from "@/lib/i18n";
 import SearchBar from "@/components/SearchBar";
 import HouseInterior from "@/components/HouseInterior";
 import MemorialSecret from "@/components/MemorialSecret";
@@ -15,6 +18,8 @@ import LoadingOverlay from "@/components/LoadingOverlay";
 import { FlyIcon } from "@/components/Icons";
 import { nameForHouse, type Stargazer } from "@/lib/stargazers";
 import { resolveTier } from "@/lib/rarity";
+import { nowInZone } from "@/lib/astro";
+import { GOSSENSASS } from "@/lib/location";
 
 // Toggle the in-scene star editor via env (NEXT_PUBLIC_DEV_CONTROLS=true).
 const DEV_CONTROLS = process.env.NEXT_PUBLIC_DEV_CONTROLS === "true";
@@ -35,10 +40,14 @@ const STARGAZER_REFRESH_MS = 5 * 60 * 1000;
 const LOADER_INTRO_MS = 900;
 const GRAPHICS_STORAGE_KEY = "star-tree-graphics-quality";
 
-function isGraphicsQuality(value: string | null): value is GraphicsQuality {
-  return value === "auto" || value === "low" || value === "medium" || value === "high";
+function isTextInputTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName.toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable;
 }
 
+// Auto-detect stays conservative: it never resolves to "extreme" — that tier is
+// opt-in only, so auto users always land on a 60fps-safe profile.
 function detectGraphicsQuality(): ResolvedGraphicsQuality {
   if (typeof window === "undefined" || typeof navigator === "undefined") return "medium";
   const nav = navigator as Navigator & { deviceMemory?: number };
@@ -53,7 +62,16 @@ function detectGraphicsQuality(): ResolvedGraphicsQuality {
   return "medium";
 }
 
-export default function Home() {
+export default function Page() {
+  return (
+    <I18nProvider>
+      <Home />
+    </I18nProvider>
+  );
+}
+
+function Home() {
+  const { t } = useI18n();
   const [stars, setStars] = useState(0);
   const [starsLive, setStarsLive] = useState(false);
   const [stargazers, setStargazers] = useState<Stargazer[] | null>(null);
@@ -73,6 +91,7 @@ export default function Home() {
   const [fly, setFly] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const [secretOpen, setSecretOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [sceneReady, setSceneReady] = useState(false);
   // Let the loader draw first; mount WebGL only after live data is ready.
   const [loaderIntroDone, setLoaderIntroDone] = useState(false);
@@ -93,9 +112,50 @@ export default function Home() {
     return () => window.clearTimeout(id);
   }, []);
 
+  // ONE Escape hierarchy for the whole HUD: memorial → house panel → menu.
+  // Fly mode is excluded — there Esc releases the pointer lock.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || isTextInputTarget(event.target) || fly) return;
+      event.preventDefault();
+      if (secretOpen) {
+        setSecretOpen(false);
+        return;
+      }
+      if (selected !== null) {
+        setSelected(null);
+        return;
+      }
+      setMenuOpen((open) => !open);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fly, secretOpen, selected]);
+
   useEffect(() => {
     const saved = window.localStorage.getItem(GRAPHICS_STORAGE_KEY);
     if (isGraphicsQuality(saved)) setGraphicsQuality(saved);
+  }, []);
+
+  // QA override: ?hour=21&sky=storm&day=3&month=7 forces manual weather so any
+  // time/condition can be checked from the URL (used by visual tests too).
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const hour = q.get("hour");
+    const sky = q.get("sky");
+    const day = q.get("day");
+    const month = q.get("month");
+    if (hour === null && sky === null) return;
+    setMode("manual");
+    setDate((d) => ({
+      ...d,
+      hour: hour !== null ? Math.min(23, Math.max(0, Number(hour) || 0)) : d.hour,
+      day: day !== null ? Math.min(31, Math.max(1, Number(day) || d.day)) : d.day,
+      month: month !== null ? Math.min(12, Math.max(1, Number(month) || d.month)) : d.month,
+    }));
+    if (sky && ["clear", "clouds", "fog", "rain", "snow", "storm"].includes(sky)) {
+      setManualSky(sky as Sky);
+    }
   }, []);
 
   useEffect(() => {
@@ -153,16 +213,36 @@ export default function Home() {
     };
   }, []);
 
-  const weather: Weather | null =
-    mode === "manual"
-      ? manualWeather(
-          date.hour,
-          Math.min(11, Math.max(0, date.month - 1)),
-          manualSky,
-          date.year,
-          date.day,
-        )
-      : liveWeather;
+  // The sun/moon follow the real clock: bump once a minute so live mode keeps
+  // moving between the 10-minute weather refreshes.
+  const [timeTick, setTimeTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTimeTick((t) => t + 1), 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const weather: Weather | null = useMemo(() => {
+    if (mode === "manual") {
+      return manualWeather(
+        date.hour,
+        Math.min(11, Math.max(0, date.month - 1)),
+        manualSky,
+        date.year,
+        date.day,
+      );
+    }
+    if (!liveWeather) return null;
+    const local = nowInZone(GOSSENSASS.tz);
+    return {
+      ...liveWeather,
+      year: local.year,
+      month: local.month,
+      day: local.day,
+      hour: local.hour,
+      minute: local.minute,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- timeTick re-reads the wall clock
+  }, [mode, date, manualSky, liveWeather, timeTick]);
 
   const params = useMemo(
     () =>
@@ -171,6 +251,13 @@ export default function Home() {
       ),
     [weather],
   );
+
+  // Dev-only introspection for the headless visual tests.
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "production") {
+      (window as unknown as { __sceneParams?: unknown }).__sceneParams = params;
+    }
+  }, [params]);
 
   const searchResults = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -259,11 +346,11 @@ export default function Home() {
           }`}
         >
           <FlyIcon className="h-3.5 w-3.5" />
-          {fly ? "Exit fly mode" : "Fly around"}
+          {fly ? t("fly.exit") : t("fly.enter")}
         </button>
         {fly && (
           <div className="pointer-events-none absolute bottom-32 left-1/2 -translate-x-1/2 text-center text-[11px] text-white/45 sm:bottom-16">
-            Click scene to lock look · WASD / arrows move · R / F up &amp; down · Esc releases
+            {t("fly.hint")}
           </div>
         )}
 
@@ -274,27 +361,67 @@ export default function Home() {
             onClose={() => setSelected(null)}
           />
         )}
-        <Hud
-          stars={stars}
-          devControls={DEV_CONTROLS}
-          onChange={(n) => setStars(Math.max(0, n))}
+        <Clock
+          mode={mode}
+          manualHour={date.hour}
+          sunrise={liveWeather?.sunrise}
+          sunset={liveWeather?.sunset}
+          onOpenMenu={() => setMenuOpen(true)}
         />
+        <RotateControls fly={fly} />
         <SettingsMenu
           weather={weather}
           mode={mode}
           date={date}
           manualSky={manualSky}
+          stars={stars}
+          devControls={DEV_CONTROLS}
+          onChangeStars={(n) => setStars(Math.max(0, n))}
           starsLive={starsLive}
           lastSync={lastSync}
           nextSync={nextSync}
           graphicsQuality={graphicsQuality}
           resolvedGraphicsQuality={resolvedGraphicsQuality}
+          open={menuOpen}
+          onOpenChange={setMenuOpen}
           onMode={setMode}
           onDate={setDate}
           onSky={setManualSky}
           onGraphicsQuality={setGraphicsQuality}
+          onReset={() => {
+            const fresh = new Date();
+            setGraphicsQuality("auto");
+            setMode("live");
+            setManualSky("clear");
+            setDate({
+              year: fresh.getFullYear(),
+              month: fresh.getMonth() + 1,
+              day: fresh.getDate(),
+              hour: 13,
+            });
+            setMenuOpen(false);
+          }}
         />
       </div>
+
+      {/* Filmic finish: soft anamorphic-style vignette + a whisper of film
+          grain. Pure DOM overlays — zero GPU pipeline cost. */}
+      <div
+        className="pointer-events-none absolute inset-0 z-[8]"
+        style={{
+          background: `radial-gradient(ellipse at center, transparent ${
+            resolvedGraphicsQuality === "extreme" ? "56%" : "62%"
+          }, rgba(4,2,0,${resolvedGraphicsQuality === "extreme" ? 0.3 : 0.2}) 100%)`,
+        }}
+      />
+      <div
+        className="pointer-events-none absolute inset-0 z-[8] mix-blend-overlay"
+        style={{
+          opacity: 0.05,
+          backgroundImage:
+            "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23g)'/%3E%3C/svg%3E\")",
+        }}
+      />
     </main>
   );
 }

@@ -6,6 +6,7 @@ import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { MAX_HOUSES } from "@/lib/layout";
+import { useQualityProfile } from "@/lib/quality";
 import { sampleBranchAnchors } from "@/lib/branches";
 import { trunkBaseRadius, trunkHeight } from "@/lib/growth";
 import { deckRadius } from "@/lib/rarity";
@@ -13,8 +14,6 @@ import type { Stargazer } from "@/lib/stargazers";
 
 const ANT = "/models/ant.glb";
 const DECK = 0.35;
-const PER_HOUSE = 4; // animated villager ants wandering each house
-const TRUNK = 26; // a small animated colony climbing the tree
 const ANT_LEN = 1.16;
 
 
@@ -60,6 +59,12 @@ export function Ants({
   stargazers?: Stargazer[] | null;
 }) {
   const { scene: antScene, animations } = useGLTF(ANT);
+  // Villager counts come from the quality tier: skinned clones + their
+  // AnimationMixers are the heaviest CPU loop in the scene.
+  const profile = useQualityProfile();
+  const perHouse = profile.antsPerHouse;
+  const trunkAnts = profile.antsTrunk;
+  const mixerStride = Math.max(1, profile.antMixerStride);
   const anchors = useMemo(() => sampleBranchAnchors(null, MAX_HOUSES), []);
   const active = Math.min(anchors.length, Math.max(0, Math.floor(stars)));
 
@@ -67,7 +72,7 @@ export function Ants({
     const rand = rng(7);
     const out: Ant[] = [];
     for (let h = 0; h < MAX_HOUSES; h++) {
-      for (let k = 0; k < PER_HOUSE; k++) {
+      for (let k = 0; k < perHouse; k++) {
         out.push({
           kind: "deck",
           house: h,
@@ -83,10 +88,10 @@ export function Ants({
         });
       }
     }
-    for (let i = 0; i < TRUNK; i++) {
+    for (let i = 0; i < trunkAnts; i++) {
       out.push({
         kind: "trunk",
-        p: i / TRUNK,
+        p: i / trunkAnts,
         speed: 0.012 + rand() * 0.01,
         turns: 2.2 + rand() * 0.6,
         phase: rand() * Math.PI * 2,
@@ -94,10 +99,12 @@ export function Ants({
       });
     }
     return out;
-  }, []);
+  }, [perHouse, trunkAnts]);
 
   const refs = useRef<(THREE.Group | null)[]>([]);
   const mixers = useRef<THREE.AnimationMixer[]>([]);
+  const mixerFrame = useRef(0);
+  const mixerAccum = useRef(0);
 
   const villagers = useMemo(() => {
     mixers.current = [];
@@ -145,7 +152,15 @@ export function Ants({
   useFrame((state, dt) => {
     const d = Math.min(dt, 0.05);
     const t = state.clock.elapsedTime;
-    mixers.current.forEach((mixer) => mixer?.update(d));
+    // Low tier updates skinned animations every Nth frame (accumulated dt so
+    // playback speed stays right) — big main-thread win, barely visible.
+    mixerFrame.current += 1;
+    mixerAccum.current += d;
+    if (mixerFrame.current % mixerStride === 0) {
+      const step = mixerAccum.current;
+      mixerAccum.current = 0;
+      mixers.current.forEach((mixer) => mixer?.update(step));
+    }
     // trunk geometry the climbers ride (matches Tree.tsx): tall, thin, ends inside
     // the crown.
     const trunkH = trunkHeight(stars);
