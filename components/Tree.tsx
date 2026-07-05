@@ -253,7 +253,7 @@ function getBarkTextures(size = 512) {
   for (const t of [map, bump, rough]) {
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.repeat.set(3, 1);
-    t.anisotropy = 8;
+    t.anisotropy = 16;
   }
   const result = { map, bump, rough };
   _barkTex.set(size, result);
@@ -482,7 +482,7 @@ function getLeafAtlas(size: number): THREE.CanvasTexture {
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
+  tex.anisotropy = 16;
   tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
   _leafAtlas.set(size, tex);
   return tex;

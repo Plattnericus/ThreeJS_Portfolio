@@ -111,3 +111,18 @@ export function resolveTier(
 ): Tier {
   return (stargazers && stargazers[i]?.tier) || tierForIndex(i);
 }
+
+// Village tier distribution (from the `tierForIndex` thresholds) — how common
+// each tier is, so the info card can say "X% of houses" and "≈ 1 in N".
+export const TIER_POPULATION: Record<Tier, number> = {
+  common: 50,
+  uncommon: 28,
+  rare: 15,
+  legendary: 7,
+};
+
+/** Rarity stats for the info card: the tier's population share and 1-in-N. */
+export function rarityStats(tier: Tier): { pct: number; oneInN: number } {
+  const pct = TIER_POPULATION[tier];
+  return { pct, oneInN: Math.max(2, Math.round(100 / pct)) };
+}

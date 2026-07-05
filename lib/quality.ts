@@ -14,7 +14,7 @@
 
 import { createContext, useContext } from "react";
 
-export type ResolvedGraphicsQuality = "low" | "medium" | "high" | "extreme";
+export type ResolvedGraphicsQuality = "low" | "medium" | "high" | "extreme" | "ultra";
 export type GraphicsQuality = "auto" | ResolvedGraphicsQuality;
 
 export const GRAPHICS_OPTIONS: GraphicsQuality[] = [
@@ -23,6 +23,7 @@ export const GRAPHICS_OPTIONS: GraphicsQuality[] = [
   "medium",
   "high",
   "extreme",
+  "ultra",
 ];
 
 export type QualityProfile = {
@@ -67,6 +68,12 @@ export type QualityProfile = {
   postprocessingSamples: 0 | 2 | 4; // MSAA samples for postprocessing render targets
   // 2D extras
   vignette: boolean;
+  // Cinematic (opt-in RDR2/BSL stack) — cheap flags on auto tiers, heavy on ultra
+  smaa: boolean; // morphological anti-aliasing pass (edge AA)
+  aerial: number; // aerial-perspective strength 0..1 (sun-aware distance haze)
+  ao: boolean; // N8AO ambient occlusion (contact darkening)
+  godRays: boolean; // volumetric light shafts on the sun disc
+  grade: boolean; // filmic split-tone color grade
 };
 
 export const QUALITY_PROFILES: Record<ResolvedGraphicsQuality, QualityProfile> = {
@@ -103,6 +110,11 @@ export const QUALITY_PROFILES: Record<ResolvedGraphicsQuality, QualityProfile> =
     bloom: false,
     postprocessingSamples: 0,
     vignette: false,
+    smaa: false,
+    aerial: 0,
+    ao: false,
+    godRays: false,
+    grade: false,
   },
   medium: {
     minDpr: 0.78,
@@ -137,6 +149,11 @@ export const QUALITY_PROFILES: Record<ResolvedGraphicsQuality, QualityProfile> =
     bloom: false,
     postprocessingSamples: 0,
     vignette: false,
+    smaa: false,
+    aerial: 0.35,
+    ao: false,
+    godRays: false,
+    grade: false,
   },
   high: {
     minDpr: 0.82,
@@ -171,6 +188,11 @@ export const QUALITY_PROFILES: Record<ResolvedGraphicsQuality, QualityProfile> =
     bloom: true,
     postprocessingSamples: 2,
     vignette: false,
+    smaa: true,
+    aerial: 0.55,
+    ao: false,
+    godRays: false,
+    grade: true,
   },
   extreme: {
     minDpr: 0.86,
@@ -205,6 +227,50 @@ export const QUALITY_PROFILES: Record<ResolvedGraphicsQuality, QualityProfile> =
     bloom: true,
     postprocessingSamples: 2,
     vignette: true,
+    smaa: true,
+    aerial: 0.85,
+    ao: true,
+    godRays: true,
+    grade: true,
+  },
+  ultra: {
+    minDpr: 1.0,
+    idleDpr: 2.0,
+    maxDpr: 2.0,
+    movingDpr: 1.5,
+    antialias: true,
+    idleCloudQuality: 0.62,
+    movingCloudQuality: 0.12,
+    cloudLayers: 3,
+    cloudMaxSteps: 18,
+    shadowMapSize: 2048,
+    shadowType: "pcfsoft",
+    leafShadows: "real",
+    canopySelfShadow: true,
+    grassBlades: 44000,
+    grassTufts: 1,
+    sprigDensity: 1.4,
+    canopyBudgetScale: 1.05,
+    leafAtlasSize: 2048,
+    barkTexSize: 2048,
+    bushes: 190,
+    flowers: 640,
+    stars: 700,
+    rainMax: 1500,
+    snowMax: 850,
+    fireflies: 46,
+    fallingLeaves: 100,
+    antsPerHouse: 3,
+    antsTrunk: 22,
+    antMixerStride: 1,
+    bloom: true,
+    postprocessingSamples: 4,
+    vignette: true,
+    smaa: true,
+    aerial: 1.0,
+    ao: true,
+    godRays: true,
+    grade: true,
   },
 };
 
@@ -214,7 +280,8 @@ export function isGraphicsQuality(value: string | null): value is GraphicsQualit
     value === "low" ||
     value === "medium" ||
     value === "high" ||
-    value === "extreme"
+    value === "extreme" ||
+    value === "ultra"
   );
 }
 

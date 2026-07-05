@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import {
   Float,
@@ -9,7 +9,16 @@ import {
   Preload,
   useGLTF,
 } from "@react-three/drei";
-import { Bloom, EffectComposer, HueSaturation, ToneMapping } from "@react-three/postprocessing";
+import {
+  Bloom,
+  BrightnessContrast,
+  EffectComposer,
+  HueSaturation,
+  N8AO,
+  SMAA,
+  ToneMapping,
+  Vignette,
+} from "@react-three/postprocessing";
 import { ToneMappingMode } from "postprocessing";
 import * as THREE from "three";
 import { sampleIslandSurface } from "@/lib/surface";
@@ -589,8 +598,35 @@ export default function Experience({
   const camMax = THREE.MathUtils.clamp(worldH * 1.6 + 26, 40, 340);
   const ambientBudget = THREE.MathUtils.clamp(perfBudget, 0.45, 1);
   const birdCount = Math.max(2, Math.round(4 * ambientBudget));
-  const bloomEnabled = quality.bloom;
+  const postEnabled =
+    quality.bloom || quality.smaa || quality.ao || quality.grade || quality.vignette;
   const postprocessingSamples = quality.postprocessingSamples;
+  // EffectComposer children must be JSX elements (no `false`), so build the post
+  // chain by pushing into a typed array instead of `{cond && <Effect/>}`.
+  const postEffects: ReactElement[] = [];
+  if (postEnabled) {
+    if (quality.ao)
+      postEffects.push(
+        <N8AO key="ao" halfRes aoRadius={1.6} intensity={1.7} distanceFalloff={1} />,
+      );
+    if (quality.bloom)
+      postEffects.push(
+        <Bloom
+          key="bloom"
+          mipmapBlur
+          intensity={0.62 + params.twilight * 0.5}
+          luminanceThreshold={0.75 - params.twilight * 0.18}
+          luminanceSmoothing={0.3}
+        />,
+      );
+    if (quality.grade)
+      postEffects.push(<BrightnessContrast key="grade" brightness={0} contrast={0.09} />);
+    postEffects.push(<HueSaturation key="hue" saturation={0.18 + params.twilight * 0.12} />);
+    postEffects.push(<ToneMapping key="tone" mode={ToneMappingMode.ACES_FILMIC} />);
+    if (quality.vignette)
+      postEffects.push(<Vignette key="vig" eskil={false} offset={0.3} darkness={0.6} />);
+    if (quality.smaa) postEffects.push(<SMAA key="smaa" />);
+  }
 
   return (
     <Canvas
@@ -750,19 +786,9 @@ export default function Experience({
             depth-tested sun disc + wide bloom produce the same shafts-through-
             gaps look with guaranteed occlusion. The post stack sleeps while
             the camera moves, then returns at the selected quality tier. */}
-        {bloomEnabled && (
+        {postEnabled && (
           <EffectComposer enabled={!performanceMoving} multisampling={postprocessingSamples}>
-            {/* Golden hour drives the finish: as the sun crosses the horizon
-                the bloom widens and its threshold drops so light spills
-                through the canopy gaps (the BSL shafts), and the grade warms. */}
-            <Bloom
-              mipmapBlur
-              intensity={0.62 + params.twilight * 0.5}
-              luminanceThreshold={0.75 - params.twilight * 0.18}
-              luminanceSmoothing={0.3}
-            />
-            <HueSaturation saturation={0.18 + params.twilight * 0.12} />
-            <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
+            {postEffects}
           </EffectComposer>
         )}
       </Suspense>

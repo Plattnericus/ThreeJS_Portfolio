@@ -57,10 +57,11 @@ function detectGraphicsQuality(): ResolvedGraphicsQuality {
   const touchFirst = navigator.maxTouchPoints > 1 && narrow;
   const cores = navigator.hardwareConcurrency || 4;
   const memory = nav.deviceMemory ?? (touchFirst ? 4 : 8);
-  const dpr = window.devicePixelRatio || 1;
 
   if (touchFirst || cores <= 4 || memory <= 4) return "low";
-  if (cores >= 12 && memory >= 12 && dpr <= 1.5 && window.innerWidth >= 1280) return "high";
+  // Capable desktops/laptops get "high" (bloom + MSAA + SMAA) even on HiDPI —
+  // the old `dpr <= 1.5` gate dumped every Retina Mac onto AA-less "medium".
+  if (cores >= 8 && memory >= 8 && window.innerWidth >= 1280) return "high";
   return "medium";
 }
 

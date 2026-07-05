@@ -864,11 +864,15 @@ export default function SettingsMenu({
                   onChange={onGraphicsQuality}
                   render={(q) => t(("graphics." + q) as MsgKey)}
                   thumbBackground={(q) =>
-                    q === "extreme"
-                      ? `linear-gradient(180deg, ${WOOD.accent}, #b8842f)`
-                      : "rgba(240,226,200,0.92)"
+                    q === "ultra"
+                      ? "linear-gradient(180deg, #ffe6b0, #e0913a)"
+                      : q === "extreme"
+                        ? `linear-gradient(180deg, ${WOOD.accent}, #b8842f)`
+                        : "rgba(240,226,200,0.92)"
                   }
-                  inactiveColor={(q) => (q === "extreme" ? WOOD.accent : WOOD.textDim)}
+                  inactiveColor={(q) =>
+                    q === "ultra" || q === "extreme" ? WOOD.accent : WOOD.textDim
+                  }
                   size="text-[10px]"
                 />
               </div>

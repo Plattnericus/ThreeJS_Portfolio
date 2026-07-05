@@ -9,6 +9,7 @@ import {
   TIER_COLOR,
   TIER_SIZE,
   deckRadius,
+  rarityStats,
   resolveTier,
   type Tier,
 } from "@/lib/rarity";
@@ -785,26 +786,36 @@ function FocusCard({
   );
 }
 
-function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+// One "trait" line for the rarity card: label · value (+ optional right chip).
+function TraitRow({
+  label,
+  value,
+  chip,
+  accent,
+}: {
+  label: string;
+  value: React.ReactNode;
+  chip?: string;
+  accent?: string;
+}) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2" style={insetStyle}>
-      <span className="min-w-0 truncate text-[11px] font-bold uppercase" style={{ color: WOOD.textDim }}>
+      <span className="text-[10.5px] font-bold uppercase tracking-wide" style={{ color: WOOD.textDim }}>
         {label}
       </span>
-      <span className="min-w-0 break-words text-right text-[12.5px] font-black" style={{ color: WOOD.text }}>
-        {value}
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="truncate text-[12.5px] font-black" style={{ color: accent ?? WOOD.text }}>
+          {value}
+        </span>
+        {chip && (
+          <span
+            className="shrink-0 rounded-md border px-1.5 py-0.5 text-[9.5px] font-bold tabular-nums"
+            style={{ ...insetStyle, color: WOOD.textDim }}
+          >
+            {chip}
+          </span>
+        )}
       </span>
-    </div>
-  );
-}
-
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-[10px] font-black uppercase tracking-[0.16em]" style={{ color: WOOD.ringLight }}>
-        {children}
-      </span>
-      <span className="h-px flex-1" style={{ background: `linear-gradient(90deg, ${WOOD.ringDark}aa, transparent)` }} />
     </div>
   );
 }
@@ -823,6 +834,7 @@ function HouseInfoPanel({
   onOpenProfile: () => void;
 }) {
   const facts = useHouseFacts(index, stargazer, stargazers);
+  const stats = rarityStats(facts.tier);
   const overlayRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -862,107 +874,124 @@ function HouseInfoPanel({
     };
   }, [index]);
 
+  const isLegendary = facts.tier === "legendary";
+
   return (
     <div
       ref={overlayRef}
-      className="absolute inset-0 z-40 flex items-center justify-center bg-black/20 p-3 opacity-0 sm:p-5 lg:justify-start lg:p-8"
+      className="absolute inset-0 z-40 flex items-center justify-center bg-black/35 p-4 opacity-0"
       onClick={onClose}
     >
       <section
         ref={panelRef}
-        className="flex max-h-[86dvh] w-full max-w-[860px] flex-col overflow-hidden rounded-2xl border p-3 opacity-0 sm:p-4 lg:max-w-[760px]"
+        className="relative w-full max-w-[420px] overflow-hidden rounded-[22px] border p-5 text-center opacity-0"
         style={panelStyle}
         onClick={(event) => event.stopPropagation()}
       >
-        <header data-info-item className="flex items-start justify-between gap-3 border-b pb-3" style={{ borderColor: "rgba(20,12,4,0.55)" }}>
-          <div className="min-w-0">
-            <div className="text-[10px] font-black uppercase tracking-[0.18em]" style={{ color: WOOD.ringLight }}>
-              {facts.copy.infoTitle}
-            </div>
-            <h2 className="mt-1 truncate text-2xl font-black leading-tight" style={{ color: WOOD.text }}>
-              {facts.name}
-            </h2>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-black uppercase">
-              <span className="rounded-full border px-2 py-0.5" style={badgeStyle(TIER_ACCENT[facts.tier])}>
-                {facts.tierLabel}
-              </span>
-              {facts.contributor && (
-                <span className="rounded-full border px-2 py-0.5" style={badgeStyle(CONTRIBUTOR_ACCENT)}>
-                  {facts.copy.contributor}
-                </span>
-              )}
-            </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={facts.copy.closeDetails}
+          className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-xl border transition hover:brightness-110 active:scale-95"
+          style={{ ...insetStyle, color: WOOD.textDim }}
+        >
+          <CloseIcon className="h-4 w-4" />
+        </button>
+
+        {/* Header — name + tier/house line (like the reference title block) */}
+        <div data-info-item>
+          <div className="text-[10px] font-black uppercase tracking-[0.24em]" style={{ color: WOOD.ringLight }}>
+            {facts.copy.infoTitle}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={facts.copy.closeDetails}
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border transition hover:brightness-110 active:scale-95"
-            style={{ ...insetStyle, color: WOOD.textDim }}
-          >
-            <CloseIcon className="h-4 w-4" />
-          </button>
-        </header>
-
-        <div className="min-h-0 flex-1 overflow-y-auto pt-4">
-          <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
-            <section data-info-item className="space-y-3">
-              <SectionTitle>{facts.copy.rarity}</SectionTitle>
-              <div className="rounded-2xl border p-3" style={insetStyle}>
-                <div className="mb-2 flex items-center justify-between text-[11px] font-black uppercase" style={{ color: WOOD.textDim }}>
-                  <span>{facts.copy.rating}</span>
-                  <span style={{ color: facts.color }}>{facts.rating}%</span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-black/35">
-                  <div
-                    className="h-full rounded-full"
-                    style={{
-                      width: `${facts.rating}%`,
-                      background: `linear-gradient(90deg, ${WOOD.woodLight}, ${facts.color})`,
-                      boxShadow: `0 0 16px ${facts.color}66`,
-                    }}
-                  />
-                </div>
-              </div>
-              <DetailRow label={facts.copy.source} value={facts.source} />
-              <DetailRow label={facts.copy.visualTraits} value={facts.copy.traitSize} />
-              <DetailRow label={facts.copy.houseIndex} value={`#${index + 1}`} />
-            </section>
-
-            <section data-info-item className="space-y-3">
-              <SectionTitle>{facts.copy.island}</SectionTitle>
-              <DetailRow label={facts.copy.building} value={facts.building} />
-              <DetailRow label={facts.copy.size} value={`${facts.size.toFixed(2)}x`} />
-              <DetailRow label={facts.copy.deck} value={facts.deck.toFixed(2)} />
-              <DetailRow label={facts.copy.house} value={facts.copy.traitFocus} />
-            </section>
-
-            <section data-info-item className="space-y-3 lg:col-span-2">
-              <SectionTitle>{facts.copy.github}</SectionTitle>
-              <div className="grid gap-2 sm:grid-cols-3">
-                <DetailRow label={facts.copy.contributor} value={facts.contributor ? facts.copy.yes : facts.copy.no} />
-                <DetailRow label={facts.copy.commits} value={numberOrDash(facts.commits, facts.locale)} />
-                <DetailRow
-                  label={facts.copy.followers}
-                  value={
-                    typeof facts.followers === "number"
-                      ? numberOrDash(facts.followers, facts.locale)
-                      : facts.copy.unknown
-                  }
-                />
-              </div>
-              <button
-                type="button"
-                onClick={onOpenProfile}
-                className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-[12px] font-black transition hover:brightness-110 active:scale-[0.99]"
-                style={primaryButtonStyle(facts.tier, facts.contributor)}
-              >
-                <StarIcon className="h-4 w-4" />
-                {facts.copy.profile}
-              </button>
-            </section>
+          <h2 className="mx-auto mt-1 max-w-full truncate text-[26px] font-black leading-tight" style={{ color: WOOD.text }}>
+            {facts.name}
+          </h2>
+          <div className="mt-1 flex items-center justify-center gap-2 text-[11px] font-black uppercase tracking-wide">
+            <span style={{ color: facts.color }}>{facts.tierLabel}</span>
+            <span aria-hidden style={{ color: WOOD.textDim }}>·</span>
+            <span style={{ color: WOOD.textDim }}>
+              {facts.copy.house} #{index + 1}
+            </span>
           </div>
         </div>
+
+        {/* What — the traits this rarity grants + why it was earned */}
+        <div data-info-item className="mt-4 space-y-2 text-left">
+          <TraitRow label={facts.copy.building} value={facts.building} accent={facts.color} chip={facts.tierLabel} />
+          <TraitRow label={facts.copy.size} value={`${facts.size.toFixed(2)}×`} chip={`${facts.copy.deck} ${facts.deck.toFixed(1)}`} />
+          {facts.contributor ? (
+            <TraitRow
+              label={facts.copy.contributor}
+              value={facts.copy.yes}
+              accent={CONTRIBUTOR_ACCENT.color}
+              chip={`${numberOrDash(facts.commits, facts.locale)} ${facts.copy.commits}`}
+            />
+          ) : (
+            <TraitRow
+              label={facts.copy.followers}
+              value={
+                typeof facts.followers === "number"
+                  ? numberOrDash(facts.followers, facts.locale)
+                  : facts.copy.unknown
+              }
+            />
+          )}
+        </div>
+
+        <div
+          data-info-item
+          className="my-4 h-px"
+          style={{ background: `linear-gradient(90deg, transparent, ${WOOD.ringDark}, transparent)` }}
+        />
+
+        {/* How rare — the headline number + 1-in-N */}
+        <div data-info-item>
+          <div className="flex items-baseline justify-center gap-2">
+            <span className="text-[11px] font-black uppercase tracking-[0.16em]" style={{ color: WOOD.textDim }}>
+              {facts.copy.rarity}
+            </span>
+            <span
+              className="text-[34px] font-black leading-none tabular-nums"
+              style={{ color: facts.color, textShadow: `0 0 20px ${facts.color}55` }}
+            >
+              {stats.pct}%
+            </span>
+          </div>
+          <div className="mt-1 text-[12px] font-semibold tabular-nums" style={{ color: WOOD.textDim }}>
+            ≈ 1 / {stats.oneInN} · {facts.copy.house}
+          </div>
+        </div>
+
+        {/* Verdict + why source */}
+        <div
+          data-info-item
+          className="mt-3 text-[18px] font-black uppercase tracking-wide"
+          style={{
+            color: isLegendary ? "#ffe0a1" : facts.color,
+            textShadow: isLegendary ? "0 0 22px rgba(255,190,86,0.5)" : "none",
+          }}
+        >
+          {facts.tierLabel}
+          {isLegendary ? " ★" : "!"}
+        </div>
+        <p data-info-item className="mt-1.5 text-[11px] leading-snug" style={{ color: WOOD.textDim }}>
+          {facts.copy.source}: {facts.source}
+        </p>
+
+        <button
+          data-info-item
+          type="button"
+          onClick={onOpenProfile}
+          className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-[12px] font-black transition hover:brightness-110 active:scale-[0.99]"
+          style={primaryButtonStyle(facts.tier, facts.contributor)}
+        >
+          <StarIcon className="h-4 w-4" />
+          {facts.copy.profile}
+        </button>
+
+        <p data-info-item className="mt-3 text-[10px] font-semibold uppercase tracking-[0.2em]" style={{ color: WOOD.textDim, opacity: 0.7 }}>
+          I · ESC
+        </p>
       </section>
     </div>
   );
