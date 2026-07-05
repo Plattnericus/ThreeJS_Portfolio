@@ -3,10 +3,10 @@ import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
 import type { Stargazer } from "@/lib/stargazers";
-import { tierFromProfile } from "@/lib/rarity";
+import { maxTier, tierFromContributor, tierFromProfile } from "@/lib/rarity";
 
 const REPO = process.env.GITHUB_REPO ?? "Plattnericus/ThreeJS_Portfolio";
-const ENRICH = 30; // how many stargazers to enrich with a profile fetch
+const ENRICH = 40; // how many stargazers to enrich with a profile fetch
 
 // ---- STRICT rate-limit protection -------------------------------------------
 // GitHub is contacted AT MOST once per CACHE_MS, no matter how many visitors,
@@ -17,10 +17,10 @@ const ENRICH = 30; // how many stargazers to enrich with a profile fetch
 //      that also survives serverless instance swaps.
 //   4. Rate-limit/error responses serve the LAST GOOD payload (stale is far
 //      better than demo) and back off before retrying.
-//   5. Without a GITHUB_TOKEN only 60 req/h are allowed — then contributor +
-//      profile enrichment is SKIPPED so a refresh costs 2 calls (24/h max).
-// Budget with token: ~33 calls per refresh × 12/h ≈ 400/h of 5000. Without
-// token: 2 × 12 = 24/h of 60. Both safely inside the limits.
+//   5. Without a GITHUB_TOKEN only 60 req/h are allowed — profile enrichment is
+//      skipped, but contributor detection still runs so a refresh costs 3 calls.
+// Budget with token: ~43 calls per refresh × 12/h ≈ 520/h of 5000. Without
+// token: 3 × 12 = 36/h of 60. Both safely inside the limits.
 const CACHE_MS = 5 * 60 * 1000;
 const ERROR_RETRY_MS = 60 * 1000; // don't hammer GitHub after a failure
 export const dynamic = "force-dynamic";
@@ -103,6 +103,20 @@ function rateLimited(res: Response): boolean {
   return res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0";
 }
 
+function applyContributorBoost(
+  stargazers: Stargazer[] | null,
+  commitsByLogin: Map<string, number>,
+) {
+  if (!stargazers) return;
+  for (const sg of stargazers) {
+    const commits = commitsByLogin.get(sg.login.toLowerCase()) ?? 0;
+    if (commits <= 0) continue;
+    sg.commits = commits;
+    sg.contributor = true;
+    sg.tier = maxTier(sg.tier, tierFromContributor(commits));
+  }
+}
+
 async function fetchFromGitHub(): Promise<Payload> {
   const authed = Boolean(process.env.GITHUB_TOKEN);
 
@@ -138,12 +152,6 @@ async function fetchFromGitHub(): Promise<Payload> {
       }));
   }
 
-  // Unauthenticated: stop here. 2 calls per refresh keeps us far below the
-  // 60/h anonymous limit; tiers fall back to the deterministic client seed.
-  if (!authed) {
-    return { repo: REPO, stars, live: true, stargazers, fetchedAt: Date.now() };
-  }
-
   // 3) contributors → who worked on the repo + their commit counts.
   const commitsByLogin = new Map<string, number>();
   try {
@@ -160,6 +168,13 @@ async function fetchFromGitHub(): Promise<Payload> {
   } catch {
     /* contributors optional */
   }
+  applyContributorBoost(stargazers, commitsByLogin);
+
+  // Unauthenticated: stop here. Contributors are still boosted; non-contributor
+  // tiers fall back to the deterministic client seed.
+  if (!authed) {
+    return { repo: REPO, stars, live: true, stargazers, fetchedAt: Date.now() };
+  }
 
   // 4) enrich each stargazer with their profile → compute the REAL tier.
   //    Profiles are memoized for an hour, so most refreshes cost 0 extra calls.
@@ -170,10 +185,8 @@ async function fetchFromGitHub(): Promise<Payload> {
         const hit = profileCache.get(sg.login.toLowerCase());
         const commits = commitsByLogin.get(sg.login.toLowerCase()) ?? 0;
         if (hit && Date.now() - hit.at < PROFILE_MS) {
-          Object.assign(sg, hit.data, {
-            commits,
-            contributor: commits > 0,
-          });
+          Object.assign(sg, hit.data);
+          applyContributorBoost([sg], commitsByLogin);
           return;
         }
         try {
@@ -198,6 +211,7 @@ async function fetchFromGitHub(): Promise<Payload> {
           };
           profileCache.set(sg.login.toLowerCase(), { at: Date.now(), data });
           Object.assign(sg, data, { commits, contributor: commits > 0 });
+          applyContributorBoost([sg], commitsByLogin);
         } catch {
           /* leave tier undefined → client falls back to deterministic */
         }

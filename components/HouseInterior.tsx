@@ -229,7 +229,7 @@ export default function HouseInterior({
   return (
     <div
       ref={overlayRef}
-      className="absolute inset-0 z-20 grid place-items-center bg-black/55 p-4 backdrop-blur-md"
+      className="absolute inset-0 z-20 grid place-items-center bg-black/70 p-4"
       onClick={onClose}
     >
       <div

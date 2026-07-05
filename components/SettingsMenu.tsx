@@ -344,7 +344,7 @@ function ExternalLinkConfirm({
     <div
       ref={rootRef}
       className="absolute inset-0 z-30 grid place-items-center p-5 opacity-0"
-      style={{ background: "rgba(8,4,1,0.6)", backdropFilter: "blur(4px)", borderRadius: "inherit" }}
+      style={{ background: "rgba(8,4,1,0.72)", borderRadius: "inherit" }}
       onClick={() => dismiss(false)}
     >
       <div
@@ -481,10 +481,10 @@ export default function SettingsMenu({
   }, [tab, credits]);
 
   useEffect(() => {
-    if (!mounted) return;
+    if (!mounted || !open) return;
     const id = window.setInterval(() => setTick((v) => v + 1), 1000);
     return () => window.clearInterval(id);
-  }, [mounted]);
+  }, [mounted, open]);
 
   // Manual panel unfolds/folds with GSAP; the header above NEVER moves because
   // the panel is anchored to a fixed top offset (not re-centered).
@@ -536,19 +536,14 @@ export default function SettingsMenu({
         gsap.set([panel, backdrop], { autoAlpha: 1, scale: 1, y: 0 });
         return;
       }
-      gsap.fromTo(backdrop, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.3, ease: "power2.out" });
+      gsap.set(items, { autoAlpha: 1, y: 0 });
+      gsap.fromTo(backdrop, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.18, ease: "power2.out" });
       gsap
         .timeline()
         .fromTo(
           panel,
-          { autoAlpha: 0, scale: 1.05, y: -12, transformOrigin: "center" },
-          { autoAlpha: 1, scale: 1, y: 0, duration: 0.42, ease: "power3.out" },
-        )
-        .fromTo(
-          items,
-          { autoAlpha: 0, y: 8 },
-          { autoAlpha: 1, y: 0, duration: 0.26, stagger: 0.03, ease: "power2.out" },
-          "-=0.22",
+          { autoAlpha: 0, scale: 1.025, y: -8, transformOrigin: "center" },
+          { autoAlpha: 1, scale: 1, y: 0, duration: 0.24, ease: "power3.out" },
         );
       return;
     }
@@ -558,12 +553,12 @@ export default function SettingsMenu({
       setMounted(false);
       return;
     }
-    gsap.to(backdrop, { autoAlpha: 0, duration: 0.26, ease: "power2.in" });
+    gsap.to(backdrop, { autoAlpha: 0, duration: 0.16, ease: "power2.in" });
     gsap.to(panel, {
       autoAlpha: 0,
-      scale: 0.97,
-      y: 8,
-      duration: 0.24,
+      scale: 0.985,
+      y: 6,
+      duration: 0.16,
       ease: "power2.inOut",
       onComplete: () => setMounted(false),
     });
@@ -620,7 +615,7 @@ export default function SettingsMenu({
       <div
         ref={backdropRef}
         className="absolute inset-0 opacity-0"
-        style={{ background: "rgba(5,3,1,0.55)", backdropFilter: "blur(5px)" }}
+        style={{ background: "rgba(5,3,1,0.68)" }}
         onClick={() => onOpenChange(false)}
       />
 
@@ -636,10 +631,10 @@ export default function SettingsMenu({
         }}
       >
         <TrunkRings
-          size={900}
+          size={520}
           seed={90210}
-          rings={30}
-          detailed
+          rings={14}
+          grain={false}
           className="pointer-events-none absolute left-1/2 top-1/2 h-[1150px] w-[1150px] -translate-x-1/2 -translate-y-1/2 opacity-[0.55]"
         />
         <div

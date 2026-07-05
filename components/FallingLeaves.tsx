@@ -60,6 +60,7 @@ export function FallingLeaves({
   treeY,
   radius = 10.5,
   budget = 1,
+  moving = false,
 }: {
   wind: number;
   gust?: number;
@@ -69,6 +70,7 @@ export function FallingLeaves({
   treeY: number;
   radius?: number;
   budget?: number;
+  moving?: boolean;
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const profile = useQualityProfile();
@@ -78,6 +80,8 @@ export function FallingLeaves({
   );
   const rngRef = useRef(mulberry(8042));
   const spawnAcc = useRef(0);
+  const frameSkip = useRef(0);
+  const dtAcc = useRef(0);
   const states = useMemo<{ current: LeafState[] }>(
     () => ({
       current: Array.from({ length: maxLeaves }, (_, i) => ({
@@ -183,8 +187,18 @@ export function FallingLeaves({
   useFrame((state, dt) => {
     const mesh = meshRef.current;
     if (!mesh) return;
+    if (moving) {
+      dtAcc.current += dt;
+      frameSkip.current = (frameSkip.current + 1) % 2;
+      if (frameSkip.current !== 0) return;
+      dt = dtAcc.current;
+      dtAcc.current = 0;
+    } else {
+      dtAcc.current = 0;
+      frameSkip.current = 0;
+    }
     const t = state.clock.elapsedTime;
-    const d = Math.min(dt, 0.04);
+    const d = Math.min(dt, moving ? 0.08 : 0.04);
     const windy = Math.max(0, wind + gust * 0.42 - 1.75);
     const wx = windVec[0];
     const wz = windVec[1];
@@ -249,7 +263,6 @@ export function FallingLeaves({
       key={maxLeaves}
       ref={meshRef}
       args={[geometry, material, maxLeaves]}
-      frustumCulled={false}
     />
   );
 }

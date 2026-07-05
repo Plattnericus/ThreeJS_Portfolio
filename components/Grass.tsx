@@ -78,7 +78,7 @@ export function Grass({
       shader.uniforms.uWind = uniforms.current.uWind;
       shader.uniforms.uWindDir = uniforms.current.uWindDir;
       shader.uniforms.uCloudCover = uniforms.current.uCloudCover;
-      shader.uniforms.uTip = { value: new THREE.Color("#8fae5c") };
+      shader.uniforms.uTip = { value: new THREE.Color("#a9c96d") };
       shader.vertexShader =
         "uniform float uTime;\nuniform float uWind;\nuniform vec2 uWindDir;\nattribute float aPhase;\nattribute float aSpeed;\nvarying float vH;\nvarying vec3 vWPos;\n" +
         shader.vertexShader.replace(
@@ -134,12 +134,12 @@ export function Grass({
       TMP.position.set(x, y, z);
       // random yaw + a gentle natural lean
       TMP.rotation.set((rng() - 0.5) * 0.35, rng() * Math.PI * 2, (rng() - 0.5) * 0.35);
-      const h = 0.85 + rng() * 1.0; // slightly shorter grass
-      const w = 1.0 + rng() * 0.7;
+      const h = 0.95 + rng() * 1.15;
+      const w = 0.95 + rng() * 0.8;
       TMP.scale.set(w, h, w);
       TMP.updateMatrix();
       mesh.setMatrixAt(i, TMP.matrix);
-      color.setHSL(0.24 + rng() * 0.06, 0.38, 0.22 + rng() * 0.14);
+      color.setHSL(0.25 + rng() * 0.07, 0.42, 0.2 + rng() * 0.16);
       mesh.setColorAt(i, color);
       phases[i] = rng() * Math.PI * 2; // unique phase per blade
       speeds[i] = 0.8 + rng() * 1.5; // unique speed per blade

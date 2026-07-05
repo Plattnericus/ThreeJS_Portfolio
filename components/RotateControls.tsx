@@ -11,7 +11,7 @@ function isTextInputTarget(target: EventTarget | null): boolean {
   return tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable;
 }
 
-type KeyId = "up" | "down" | "left" | "right" | "shift";
+type KeyId = "up" | "down" | "left" | "right" | "shift" | "zoom";
 
 // Game-style keycap: carved wooden key with an engraved glyph. Lights up while
 // held (pointer OR the real keyboard key) and physically presses down.
@@ -71,6 +71,7 @@ export default function RotateControls({ fly }: { fly: boolean }) {
     left: false,
     right: false,
     shift: false,
+    zoom: false,
   });
 
   const mark = (key: KeyId, on: boolean) =>
@@ -81,20 +82,21 @@ export default function RotateControls({ fly }: { fly: boolean }) {
       cameraBus.rotate = 0;
       cameraBus.tilt = 0;
       cameraBus.fast = false;
+      cameraBus.zoom = false;
       return;
     }
     const down = (e: KeyboardEvent) => {
+      if (isTextInputTarget(e.target)) return;
       if (e.key === "Shift") {
         cameraBus.fast = true;
         mark("shift", true);
       }
-      if (isTextInputTarget(e.target)) return;
       if (e.key === "ArrowLeft") {
-        cameraBus.rotate = 1;
+        cameraBus.rotate = -1;
         mark("left", true);
         e.preventDefault();
       } else if (e.key === "ArrowRight") {
-        cameraBus.rotate = -1;
+        cameraBus.rotate = 1;
         mark("right", true);
         e.preventDefault();
       } else if (e.key === "ArrowUp") {
@@ -105,6 +107,10 @@ export default function RotateControls({ fly }: { fly: boolean }) {
         cameraBus.tilt = -1;
         mark("down", true);
         e.preventDefault();
+      } else if (e.key.toLowerCase() === "c") {
+        cameraBus.zoom = true;
+        mark("zoom", true);
+        e.preventDefault();
       }
     };
     const up = (e: KeyboardEvent) => {
@@ -113,11 +119,11 @@ export default function RotateControls({ fly }: { fly: boolean }) {
         mark("shift", false);
       }
       if (e.key === "ArrowLeft") {
-        if (cameraBus.rotate === 1) cameraBus.rotate = 0;
+        if (cameraBus.rotate === -1) cameraBus.rotate = 0;
         mark("left", false);
       }
       if (e.key === "ArrowRight") {
-        if (cameraBus.rotate === -1) cameraBus.rotate = 0;
+        if (cameraBus.rotate === 1) cameraBus.rotate = 0;
         mark("right", false);
       }
       if (e.key === "ArrowUp") {
@@ -128,12 +134,17 @@ export default function RotateControls({ fly }: { fly: boolean }) {
         if (cameraBus.tilt === -1) cameraBus.tilt = 0;
         mark("down", false);
       }
+      if (e.key.toLowerCase() === "c") {
+        cameraBus.zoom = false;
+        mark("zoom", false);
+      }
     };
     const blur = () => {
       cameraBus.rotate = 0;
       cameraBus.tilt = 0;
       cameraBus.fast = false;
-      setHeld({ up: false, down: false, left: false, right: false, shift: false });
+      cameraBus.zoom = false;
+      setHeld({ up: false, down: false, left: false, right: false, shift: false, zoom: false });
     };
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
@@ -170,18 +181,39 @@ export default function RotateControls({ fly }: { fly: boolean }) {
     },
   });
 
+  const holdZoom = {
+    onPointerDown: (e: React.PointerEvent) => {
+      (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+      cameraBus.zoom = true;
+      mark("zoom", true);
+    },
+    onPointerUp: () => {
+      cameraBus.zoom = false;
+      mark("zoom", false);
+    },
+    onPointerCancel: () => {
+      cameraBus.zoom = false;
+      mark("zoom", false);
+    },
+    onPointerLeave: () => {
+      cameraBus.zoom = false;
+      mark("zoom", false);
+    },
+  };
+
   // Bare keycaps only — no plaque, no labels.
   return (
     <div className="anim-rise absolute bottom-5 right-5 z-20 flex items-end gap-2.5">
       <div className="flex flex-col items-center gap-1">
         <Keycap glyph="↑" active={held.up} onHold={hold("tilt", 1, "up")} />
         <div className="flex gap-1">
-          <Keycap glyph="←" active={held.left} onHold={hold("rotate", 1, "left")} />
+          <Keycap glyph="←" active={held.left} onHold={hold("rotate", -1, "left")} />
           <Keycap glyph="↓" active={held.down} onHold={hold("tilt", -1, "down")} />
-          <Keycap glyph="→" active={held.right} onHold={hold("rotate", -1, "right")} />
+          <Keycap glyph="→" active={held.right} onHold={hold("rotate", 1, "right")} />
         </div>
       </div>
       <div className="flex flex-col items-stretch gap-1">
+        <Keycap glyph="C" wide active={held.zoom} onHold={holdZoom} />
         <Keycap glyph="⇧ Shift" wide active={held.shift} />
         <Keycap glyph="Esc" wide active={false} />
       </div>

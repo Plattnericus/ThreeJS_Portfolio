@@ -13,6 +13,7 @@ import { Bloom, EffectComposer, HueSaturation, ToneMapping } from "@react-three/
 import { ToneMappingMode } from "postprocessing";
 import * as THREE from "three";
 import { sampleIslandSurface } from "@/lib/surface";
+import { sampleBranchAnchors } from "@/lib/branches";
 import { Island } from "./Island";
 import { Tree } from "./Tree";
 import { Houses } from "./Houses";
@@ -32,6 +33,8 @@ import { NightSky } from "./NightSky";
 import { CozyFlyControls } from "./CozyFlyControls";
 import { treeHeight } from "@/lib/growth";
 import { spineAt } from "@/lib/bonsai";
+import { MAX_HOUSES } from "@/lib/layout";
+import { deckRadius, TIER_SIZE, resolveTier } from "@/lib/rarity";
 import type { CloudLayerParams, SceneParams } from "@/lib/weather";
 import type { Stargazer } from "@/lib/stargazers";
 import {
@@ -40,7 +43,14 @@ import {
   useQualityProfile,
   type ResolvedGraphicsQuality as Quality,
 } from "@/lib/quality";
-import { cameraBus, ROTATE_FAST_MULTIPLIER, ROTATE_SPEED, TILT_SPEED } from "@/lib/cameraBus";
+import {
+  cameraBus,
+  DEFAULT_FOV,
+  ROTATE_FAST_MULTIPLIER,
+  ROTATE_SPEED,
+  TILT_SPEED,
+  ZOOM_FOV,
+} from "@/lib/cameraBus";
 
 // Shared scene scale for the island and tree.
 const ISLAND_SCALE = 0.8;
@@ -297,6 +307,12 @@ function VolumetricClouds({
 // never touch React state per frame.
 function CameraRotateDriver() {
   useFrame((state, dt) => {
+    const camera = state.camera as THREE.PerspectiveCamera;
+    const targetFov = cameraBus.zoom ? ZOOM_FOV : DEFAULT_FOV;
+    if (Math.abs(camera.fov - targetFov) > 0.02) {
+      camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 12);
+      camera.updateProjectionMatrix();
+    }
     if (cameraBus.rotate === 0 && cameraBus.tilt === 0) return;
     const controls = state.controls as unknown as {
       getAzimuthalAngle?: () => number;
@@ -323,6 +339,61 @@ function CameraRotateDriver() {
   return null;
 }
 
+type HouseFocusTarget = {
+  target: [number, number, number];
+  cameraPosition: [number, number, number];
+};
+
+function CameraFocusRig({
+  defaultTarget,
+  focusTarget,
+  focusKey,
+}: {
+  defaultTarget: [number, number, number];
+  focusTarget: HouseFocusTarget | null;
+  focusKey: number | null;
+}) {
+  const desiredTarget = useRef(new THREE.Vector3());
+  const desiredCamera = useRef(new THREE.Vector3());
+  const driveCamera = useRef(false);
+
+  useEffect(() => {
+    driveCamera.current = focusTarget !== null;
+  }, [focusKey, focusTarget]);
+
+  useFrame((state, dt) => {
+    const controls = state.controls as unknown as {
+      target?: THREE.Vector3;
+      update?: () => void;
+    } | null;
+    if (!controls?.target) return;
+
+    const target = focusTarget?.target ?? defaultTarget;
+    desiredTarget.current.set(target[0], target[1], target[2]);
+    const targetEase = 1 - Math.exp(-dt * (focusTarget ? 5.2 : 3.4));
+    controls.target.lerp(desiredTarget.current, targetEase);
+
+    if (focusTarget && driveCamera.current) {
+      desiredCamera.current.set(
+        focusTarget.cameraPosition[0],
+        focusTarget.cameraPosition[1],
+        focusTarget.cameraPosition[2],
+      );
+      state.camera.position.lerp(desiredCamera.current, 1 - Math.exp(-dt * 3.9));
+      if (state.camera.position.distanceToSquared(desiredCamera.current) < 0.035) {
+        driveCamera.current = false;
+      }
+    }
+
+    controls.update?.();
+    // NOTE: no positive render-priority here — any useFrame priority > 0 turns
+    // OFF R3F's automatic gl.render, which blanks the whole scene on tiers
+    // without the EffectComposer (low/medium). Default priority keeps auto-render.
+  });
+
+  return null;
+}
+
 function SceneReadySignal({ onReady }: { onReady?: () => void }) {
   const fired = useRef(false);
   useFrame(() => {
@@ -344,6 +415,7 @@ function Plateau({
   grassBlades,
   grassTufts,
   budget = 1,
+  moving = false,
 }: {
   wind: number;
   gust: number;
@@ -354,6 +426,7 @@ function Plateau({
   grassBlades: number;
   grassTufts: number;
   budget?: number;
+  moving?: boolean;
 }) {
   const { scene } = useGLTF("/models/island.glb");
   const profile = useQualityProfile();
@@ -383,6 +456,7 @@ function Plateau({
         treeY={TREE_Y}
         radius={PLATEAU_R + 2}
         budget={ambientBudget}
+        moving={moving}
       />
     </>
   );
@@ -392,9 +466,11 @@ export default function Experience({
   stars,
   params,
   highlight = -1,
+  focusedHouse = null,
   fly = false,
   stargazers = null,
   graphicsQuality = "medium",
+  uiOverlayOpen = false,
   onSelectHouse,
   onFindDove,
   onReady,
@@ -402,9 +478,11 @@ export default function Experience({
   stars: number;
   params: SceneParams;
   highlight?: number;
+  focusedHouse?: number | null;
   fly?: boolean;
   stargazers?: Stargazer[] | null;
   graphicsQuality?: Quality;
+  uiOverlayOpen?: boolean;
   onSelectHouse?: (i: number) => void;
   onFindDove?: () => void;
   onReady?: () => void;
@@ -429,12 +507,14 @@ export default function Experience({
   const [shadowFallback, setShadowFallback] = useState(false);
   const [cameraMoving, setCameraMoving] = useState(false);
   const settleTimer = useRef<number | null>(null);
-  const performanceMoving = fly || cameraMoving;
-  const effectiveDpr = performanceMoving
-    ? Math.min(dpr, quality.movingDpr)
+  const interactionMoving = fly || cameraMoving;
+  const performanceMoving = interactionMoving || uiOverlayOpen;
+  const motionDpr = Math.min(dpr, quality.movingDpr);
+  const effectiveDpr = interactionMoving
+    ? motionDpr
     : Math.min(dpr, quality.maxDpr);
   const effectiveCloudQuality = performanceMoving
-    ? Math.min(cloudQuality, quality.movingCloudQuality)
+    ? Math.min(cloudQuality, quality.movingCloudQuality * 0.65)
     : cloudQuality;
 
   useEffect(() => {
@@ -457,6 +537,15 @@ export default function Experience({
     if (settleTimer.current !== null) window.clearTimeout(settleTimer.current);
     settleTimer.current = window.setTimeout(() => setCameraMoving(false), 420);
   };
+
+  useEffect(() => {
+    if (focusedHouse === null) return;
+    markCameraMoving();
+    const id = window.setTimeout(markCameraSettling, 960);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- focus changes are the only trigger.
+  }, [focusedHouse]);
+
   // Orbit around the current trunk center.
   const worldH = treeHeight(stars) * TREE_BOOST;
   // A grown tree pushes the camera far out — scale the fog band with it so
@@ -468,18 +557,48 @@ export default function Experience({
     TREE_Y + trunkTargetLocal.y * TREE_BOOST,
     trunkTargetLocal.z * TREE_BOOST,
   ];
+  const houseAnchors = useMemo(() => sampleBranchAnchors(null, MAX_HOUSES), []);
+  const focusTarget = useMemo<HouseFocusTarget | null>(() => {
+    if (focusedHouse === null) return null;
+    const active = Math.min(houseAnchors.length, Math.max(0, Math.floor(stars)));
+    const anchor = houseAnchors[focusedHouse];
+    if (!anchor || focusedHouse >= active) return null;
+
+    const tier = resolveTier(focusedHouse, stargazers);
+    const size = TIER_SIZE[tier];
+    const deck = deckRadius(focusedHouse, stargazers) * TREE_BOOST;
+    const target = new THREE.Vector3(
+      anchor.pos.x * TREE_BOOST,
+      TREE_Y + (anchor.pos.y + 0.72 + size * 0.46) * TREE_BOOST,
+      anchor.pos.z * TREE_BOOST,
+    );
+    const radial = new THREE.Vector3(anchor.pos.x, 0, anchor.pos.z);
+    if (radial.lengthSq() < 0.001) radial.set(1, 0, 1);
+    radial.normalize();
+    const distance = THREE.MathUtils.clamp(deck * 4.9 + 7.2, 10, 18);
+    const lift = THREE.MathUtils.clamp(size * 2.4 + 2.8, 4.4, 7.4);
+    const cameraPosition = target.clone().add(
+      new THREE.Vector3(radial.x * distance, lift, radial.z * distance),
+    );
+
+    return {
+      target: [target.x, target.y, target.z],
+      cameraPosition: [cameraPosition.x, cameraPosition.y, cameraPosition.z],
+    };
+  }, [focusedHouse, houseAnchors, stargazers, stars]);
   const camMax = THREE.MathUtils.clamp(worldH * 1.6 + 26, 40, 340);
   const ambientBudget = THREE.MathUtils.clamp(perfBudget, 0.45, 1);
   const birdCount = Math.max(2, Math.round(4 * ambientBudget));
-  const bloomEnabled = quality.bloom && (!performanceMoving || quality.movingBloom);
-  const postprocessingSamples = performanceMoving ? 0 : quality.postprocessingSamples;
+  const bloomEnabled = quality.bloom;
+  const postprocessingSamples = quality.postprocessingSamples;
 
   return (
     <Canvas
       key={graphicsQuality}
+      frameloop="always"
       shadows
       dpr={effectiveDpr}
-      camera={{ position: [26, 18, 26], fov: 42, near: 0.1, far: 600 }}
+      camera={{ position: [26, 18, 26], fov: DEFAULT_FOV, near: 0.1, far: 600 }}
       gl={{
         antialias: quality.antialias,
         alpha: false,
@@ -554,7 +673,11 @@ export default function Experience({
         />
         <Dove interactive={!fly} onFind={onFindDove} moving={performanceMoving} />
 
-        <Float speed={1.1} rotationIntensity={0.1} floatIntensity={0.5}>
+        <Float
+          speed={performanceMoving ? 0 : 1.1}
+          rotationIntensity={performanceMoving ? 0 : 0.1}
+          floatIntensity={performanceMoving ? 0 : 0.5}
+        >
           <Island snow={params.snow} scale={ISLAND_SCALE} cloudCover={params.cloud} windVec={params.windVec} />
           <Plateau
             wind={params.wind}
@@ -566,6 +689,7 @@ export default function Experience({
             grassBlades={quality.grassBlades}
             grassTufts={quality.grassTufts}
             budget={ambientBudget}
+            moving={performanceMoving}
           />
           <group position={[0, TREE_Y, 0]} scale={TREE_BOOST}>
             <Tree
@@ -588,10 +712,12 @@ export default function Experience({
                 stars={stars}
                 wind={params.wind}
                 highlight={highlight}
+                focused={focusedHouse}
                 night={night}
                 stargazers={stargazers}
                 interactive={!fly}
                 onSelect={onSelectHouse}
+                moving={performanceMoving}
               />
               <Bridges stars={stars} night={night} stargazers={stargazers} />
               <Ants
@@ -613,6 +739,7 @@ export default function Experience({
           windVec={params.windVec}
           storm={params.storm}
           budget={perfBudget}
+          moving={performanceMoving}
         />
         <Preload all />
 
@@ -621,10 +748,10 @@ export default function Experience({
         {/* BSL-style finish (high/extreme). NO screen-space god-rays pass: its
             depth mask kept compositing the sun OVER the canopy. Instead the
             depth-tested sun disc + wide bloom produce the same shafts-through-
-            gaps look with guaranteed occlusion. MSAA follows the quality tier
-            and drops while the camera is moving. */}
+            gaps look with guaranteed occlusion. The post stack sleeps while
+            the camera moves, then returns at the selected quality tier. */}
         {bloomEnabled && (
-          <EffectComposer multisampling={postprocessingSamples}>
+          <EffectComposer enabled={!performanceMoving} multisampling={postprocessingSamples}>
             {/* Golden hour drives the finish: as the sun crosses the horizon
                 the bloom widens and its threshold drops so light spills
                 through the canopy gaps (the BSL shafts), and the grade warms. */}
@@ -642,6 +769,13 @@ export default function Experience({
       </QualityContext.Provider>
 
       {!fly && <CameraRotateDriver />}
+      {!fly && (
+        <CameraFocusRig
+          defaultTarget={orbitTarget}
+          focusTarget={focusTarget}
+          focusKey={focusedHouse}
+        />
+      )}
       {fly ? (
         <CozyFlyControls speed={8} />
       ) : (
@@ -654,7 +788,7 @@ export default function Experience({
           minDistance={12}
           maxDistance={camMax}
           maxPolarAngle={Math.PI / 1.8}
-          autoRotate
+          autoRotate={!uiOverlayOpen}
           autoRotateSpeed={0.35}
           onStart={markCameraMoving}
           onEnd={markCameraSettling}

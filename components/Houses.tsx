@@ -1,17 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useFrame, type ThreeEvent } from "@react-three/fiber";
 import { Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import gsap from "gsap";
-import { TIER_BUILDING, TIER_SIZE, Tier, deckRadius, resolveTier } from "@/lib/rarity";
+import { TIER_BUILDING, TIER_COLOR, TIER_SIZE, Tier, deckRadius, resolveTier } from "@/lib/rarity";
 import { MAX_HOUSES } from "@/lib/layout";
 import { sampleBranchAnchors, type Anchor } from "@/lib/branches";
 import { buildLantern, setLanternGlow, LANTERN_SIZE } from "@/lib/lantern";
 import { nameForIndex } from "@/lib/names";
 import type { Stargazer } from "@/lib/stargazers";
+import { useI18n, type MsgKey } from "@/lib/i18n";
 
 const PACK = "/models/casual_village_buildings_pack.glb";
 const LANTERN = "/models/stylized_lantern.glb";
@@ -168,8 +169,10 @@ function House({
   anchor,
   tier,
   active,
+  focused,
   night,
   name,
+  contributor = false,
   makeBuilding,
   lanternScene,
   interactive,
@@ -180,14 +183,17 @@ function House({
   anchor: Anchor;
   tier: Tier;
   active: boolean;
+  focused: boolean;
   night: number;
   name: string;
+  contributor?: boolean;
   makeBuilding: BuildFn;
   lanternScene: THREE.Object3D;
   interactive: boolean;
   onSelect?: (i: number) => void;
   setRef: (i: number, g: THREE.Group | null) => void;
 }) {
+  const { t } = useI18n();
   const size = TIER_SIZE[tier];
   const [hovered, setHovered] = useState(false);
   const innerRef = useRef<THREE.Group>(null);
@@ -227,16 +233,17 @@ function House({
 
   // Hover → brighten (emissive) + a subtle scale pop, eased with GSAP.
   useEffect(() => {
+    const attention = hovered || focused;
     const glow = { v: built.mats[0]?.emissiveIntensity ?? 0 };
     const t1 = gsap.to(glow, {
-      v: hovered ? 0.16 : 0, // just a touch brighter, not a flashbang
+      v: attention ? 0.18 : 0, // just a touch brighter, not a flashbang
       duration: 0.35,
       ease: "power2.out",
       onUpdate: () => built.mats.forEach((m) => (m.emissiveIntensity = glow.v)),
     });
     let t2: gsap.core.Tween | undefined;
     if (innerRef.current) {
-      const s = hovered ? 1.03 : 1;
+      const s = attention ? 1.035 : 1;
       t2 = gsap.to(innerRef.current.scale, {
         x: s,
         y: s,
@@ -249,7 +256,7 @@ function House({
       t1.kill();
       t2?.kill();
     };
-  }, [hovered, built]);
+  }, [hovered, focused, built]);
 
   const lightsOn = night > 0.04;
   const eventHandlers = interactive
@@ -309,9 +316,21 @@ function House({
           pointerEvents="none"
           wrapperClass="select-none"
         >
-          <div className="anim-fade pointer-events-none whitespace-nowrap rounded-full border border-white/15 bg-[#0d141d]/90 px-3 py-1 text-[13px] font-medium text-white shadow-lg shadow-black/40 backdrop-blur-sm">
-            {name}
-            <span className="ml-px text-white/40">↗</span>
+          <div className="anim-fade pointer-events-none whitespace-nowrap rounded-xl border border-white/15 bg-[#0d141d]/95 px-3 py-1.5 text-white shadow-lg shadow-black/40">
+            <div className="text-[13px] font-medium">
+              {name}
+              <span className="ml-px text-white/40">↗</span>
+            </div>
+            <div className="mt-0.5 flex items-center justify-center gap-1.5 text-[10px] font-bold uppercase tracking-wide">
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ background: TIER_COLOR[tier] }}
+              />
+              <span style={{ color: TIER_COLOR[tier] }}>
+                {t(("tier." + tier) as MsgKey)}
+              </span>
+              {contributor && <span className="text-[#e0b25c]">· {t("search.contributor")}</span>}
+            </div>
           </div>
         </Html>
       )}
@@ -325,49 +344,76 @@ function ExtraDeckLanterns({
   night,
   stargazers,
   lanternScene,
+  moving = false,
 }: {
   anchors: Anchor[];
   active: number;
   night: number;
   stargazers?: Stargazer[] | null;
   lanternScene: THREE.Object3D;
+  moving?: boolean;
 }) {
   const refs = useRef<(THREE.Group | null)[]>([]);
+  const frameSkip = useRef(0);
   const items = useMemo(() => {
-    const out: { i: number; angle: number; radius: number; lantern: THREE.Group }[] = [];
+    const out: {
+      i: number;
+      y: number;
+      phase: number;
+      yaw: number;
+      x: number;
+      z: number;
+      lantern: THREE.Group;
+    }[] = [];
     for (let i = LIT_HOUSES; i < active && out.length < EXTRA_LANTERNS; i++) {
       if ((i - LIT_HOUSES) % 2 !== 0 && rand(i + 91) > 0.35) continue;
+      const anchor = anchors[i];
       const r = deckRadius(i, stargazers);
+      const angle = rand(i + 211) * Math.PI * 2;
+      const radius = r * (0.72 + rand(i + 33) * 0.18);
       out.push({
         i,
-        angle: rand(i + 211) * Math.PI * 2,
-        radius: r * (0.72 + rand(i + 33) * 0.18),
+        y: anchor.pos.y + 0.42,
+        phase: i,
+        yaw: -angle + Math.PI * 0.5,
+        x: anchor.pos.x + Math.cos(angle) * radius,
+        z: anchor.pos.z + Math.sin(angle) * radius,
         lantern: buildLantern(lanternScene, LANTERN_SIZE * 0.92, LANTERN_ROT, 1),
       });
     }
     return out;
-  }, [active, lanternScene, stargazers]);
+  }, [active, anchors, lanternScene, stargazers]);
 
   // Glow tracks day/night without rebuilding the lantern clones.
   useEffect(() => {
     for (const item of items) setLanternGlow(item.lantern, 0.25 + night * 2.6);
   }, [items, night]);
 
+  useLayoutEffect(() => {
+    for (let k = 0; k < items.length; k++) {
+      const g = refs.current[k];
+      if (!g) continue;
+      const item = items[k];
+      g.position.set(item.x, item.y, item.z);
+      g.rotation.y = item.yaw;
+      g.visible = true;
+    }
+  }, [items]);
+
   useFrame((state) => {
+    if (moving) {
+      frameSkip.current = (frameSkip.current + 1) % 2;
+      if (frameSkip.current !== 0) return;
+    } else {
+      frameSkip.current = 0;
+    }
     const t = state.clock.elapsedTime;
     for (let k = 0; k < items.length; k++) {
       const g = refs.current[k];
       if (!g) continue;
       const item = items[k];
-      const anchor = anchors[item.i];
-      g.position.set(
-        anchor.pos.x + Math.cos(item.angle) * item.radius,
-        anchor.pos.y + 0.42 + Math.sin(t * 0.75 + item.i) * 0.025,
-        anchor.pos.z + Math.sin(item.angle) * item.radius,
-      );
-      g.rotation.y = -item.angle + Math.PI * 0.5;
-      g.rotation.z = Math.sin(t * 0.62 + item.i) * 0.035;
-      g.visible = item.i < active;
+      g.position.y = item.y + Math.sin(t * 0.75 + item.phase) * 0.025;
+      g.rotation.z = Math.sin(t * 0.62 + item.phase) * 0.035;
     }
   });
 
@@ -401,18 +447,22 @@ function ExtraDeckLanterns({
 export function Houses({
   stars,
   highlight = -1,
+  focused = null,
   night = 0,
   stargazers = null,
   interactive = true,
   onSelect,
+  moving = false,
 }: {
   stars: number;
   wind?: number;
   highlight?: number;
+  focused?: number | null;
   night?: number;
   stargazers?: Stargazer[] | null;
   interactive?: boolean;
   onSelect?: (i: number) => void;
+  moving?: boolean;
 }) {
   const makeBuilding = useBuildingFactory();
   const { scene: lanternScene } = useGLTF(LANTERN);
@@ -421,9 +471,16 @@ export function Houses({
 
   const groups = useRef<(THREE.Group | null)[]>([]);
   const lastLoopCount = useRef(0);
+  const frameSkip = useRef(0);
   const active = Math.min(anchors.length, Math.max(0, Math.floor(stars)));
 
   useFrame((state) => {
+    if (moving) {
+      frameSkip.current = (frameSkip.current + 1) % 2;
+      if (frameSkip.current !== 0) return;
+    } else {
+      frameSkip.current = 0;
+    }
     const t = state.clock.elapsedTime;
     const loopCount = Math.min(
       anchors.length,
@@ -455,8 +512,10 @@ export function Houses({
           anchor={a}
           tier={resolveTier(i, stargazers)}
           active={i < active}
+          focused={focused === i}
           night={night}
           name={stargazers?.[i]?.login ?? nameForIndex(i)}
+          contributor={Boolean(stargazers?.[i]?.contributor)}
           makeBuilding={makeBuilding}
           lanternScene={lanternScene}
           interactive={interactive}
@@ -472,6 +531,7 @@ export function Houses({
         night={night}
         stargazers={stargazers}
         lanternScene={lanternScene}
+        moving={moving}
       />
     </group>
   );

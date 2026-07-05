@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import { nowInZone, type ZonedParts } from "@/lib/astro";
 import { GOSSENSASS } from "@/lib/location";
 import { useI18n } from "@/lib/i18n";
@@ -41,6 +41,7 @@ export default function Clock({
   onOpenMenu: () => void;
 }) {
   const { t } = useI18n();
+  const pointerOpened = useRef(false);
   // Time is read on the CLIENT only (starts null) — the server can't know the
   // visitor-moment wall time, and rendering it during SSR causes hydration
   // mismatches.
@@ -72,6 +73,12 @@ export default function Clock({
     return { rise: fmt(sunrise), set: fmt(sunset) };
   }, [sunrise, sunset]);
 
+  const openMenu = (event: SyntheticEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onOpenMenu();
+  };
+
   return (
     <div className="anim-slide-right absolute right-[calc(1.25rem+env(safe-area-inset-right))] top-[calc(1.25rem+env(safe-area-inset-top))] z-30 flex items-start gap-2.5">
       {(times.rise || times.set) && (
@@ -84,9 +91,28 @@ export default function Clock({
         </div>
       )}
       <button
-        onClick={onOpenMenu}
+        type="button"
+        onPointerDown={(event) => {
+          event.stopPropagation();
+        }}
+        onPointerUp={(event) => {
+          pointerOpened.current = true;
+          openMenu(event);
+          window.setTimeout(() => {
+            pointerOpened.current = false;
+          }, 0);
+        }}
+        onClick={(event) => {
+          if (pointerOpened.current) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+          openMenu(event);
+        }}
         aria-label={t("a11y.menu")}
         className="clock-btn relative h-[62px] w-[62px] drop-shadow-[0_6px_14px_rgba(0,0,0,0.45)] transition hover:scale-[1.04] active:scale-95 sm:h-[78px] sm:w-[78px]"
+        style={{ touchAction: "manipulation" }}
       >
         <TrunkRings size={78} seed={4211} rings={6} className="absolute inset-0 h-full w-full" />
         <svg viewBox="0 0 78 78" className="absolute inset-0 h-full w-full" aria-hidden>

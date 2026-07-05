@@ -65,15 +65,14 @@ export function Flora({
     [],
   );
 
-  // A real-ish flower: 5 petals opening upward (coloured per flower) on a thin
-  // green stem (a separate mesh so the stem stays green).
+  // A real-ish flower: layered petals + a small warm center on a thin green stem.
   const bloomGeo = useMemo(() => {
     const petals: THREE.BufferGeometry[] = [];
-    for (let k = 0; k < 5; k++) {
-      const p = new THREE.PlaneGeometry(0.09, 0.18);
+    for (let k = 0; k < 6; k++) {
+      const p = new THREE.PlaneGeometry(0.105, 0.21);
       p.translate(0, 0.09, 0); // base at origin
-      p.rotateX(-0.95); // tilt outward/up
-      p.rotateY((k / 5) * Math.PI * 2);
+      p.rotateX(-0.98); // tilt outward/up
+      p.rotateY((k / 6) * Math.PI * 2);
       petals.push(p);
     }
     const bloom = mergeAll(petals);
@@ -98,10 +97,26 @@ export function Flora({
       new THREE.MeshStandardMaterial({ color: "#4f7a36", roughness: 0.9 }),
     [],
   );
+  const centerGeo = useMemo(() => {
+    const g = new THREE.IcosahedronGeometry(0.045, 1);
+    g.translate(0, 0.42, 0);
+    return g;
+  }, []);
+  const centerMat = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: "#f2c94c",
+        roughness: 0.75,
+        emissive: "#3a2706",
+        emissiveIntensity: 0.08,
+      }),
+    [],
+  );
 
   const bushRef = useRef<THREE.InstancedMesh>(null);
   const bloomRef = useRef<THREE.InstancedMesh>(null);
   const stemRef = useRef<THREE.InstancedMesh>(null);
+  const centerRef = useRef<THREE.InstancedMesh>(null);
   const { bushes: BUSHES, flowers: FLOWERS } = useQualityProfile();
 
   useEffect(() => {
@@ -128,26 +143,30 @@ export function Flora({
 
     const bloom = bloomRef.current;
     const stem = stemRef.current;
-    if (bloom && stem) {
+    const center = centerRef.current;
+    if (bloom && stem && center) {
       const rng = mulberry(99);
       const col = new THREE.Color();
       for (let i = 0; i < FLOWERS; i++) {
         const p = scatter(radius, topY, rng, surface);
         TMP.position.copy(p);
         TMP.rotation.set(0, rng() * Math.PI * 2, 0);
-        const s = 0.7 + rng() * 0.5; // small flowers
+        const s = 0.76 + rng() * 0.56; // small but readable flowers
         TMP.scale.set(s, s, s);
         TMP.updateMatrix();
         bloom.setMatrixAt(i, TMP.matrix);
         stem.setMatrixAt(i, TMP.matrix);
+        center.setMatrixAt(i, TMP.matrix);
         col.set(FLOWER_COLORS[(rng() * FLOWER_COLORS.length) | 0]);
         bloom.setColorAt(i, col);
       }
       bloom.instanceMatrix.needsUpdate = true;
       stem.instanceMatrix.needsUpdate = true;
+      center.instanceMatrix.needsUpdate = true;
       if (bloom.instanceColor) bloom.instanceColor.needsUpdate = true;
       bloom.computeBoundingSphere();
       stem.computeBoundingSphere();
+      center.computeBoundingSphere();
     }
   }, [radius, topY, surface, BUSHES, FLOWERS]);
 
@@ -166,6 +185,10 @@ export function Flora({
       <instancedMesh
         ref={bloomRef}
         args={[bloomGeo, bloomMat, FLOWERS]}
+      />
+      <instancedMesh
+        ref={centerRef}
+        args={[centerGeo, centerMat, FLOWERS]}
       />
     </group>
   );

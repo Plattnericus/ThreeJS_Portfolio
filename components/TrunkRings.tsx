@@ -82,12 +82,14 @@ export function TrunkRings({
   seed = 20260703,
   rings = 11,
   detailed = false,
+  grain = true,
   className,
 }: {
   size?: number;
   seed?: number;
   rings?: number;
   detailed?: boolean;
+  grain?: boolean;
   className?: string;
 }) {
   const art = useMemo(() => {
@@ -274,8 +276,8 @@ export function TrunkRings({
       <path d={art.bark} fill={`url(#wood-heart-${seed})`} />
 
       {/* coarse blotchy grain + fine speckle, clipped to the face */}
-      <path d={art.bark} fill="#000" opacity={0.3} filter={`url(#wood-grain-${seed})`} />
-      {detailed && <path d={art.bark} fill="#000" opacity={0.2} filter={`url(#wood-fine-${seed})`} />}
+      {grain && <path d={art.bark} fill="#000" opacity={0.3} filter={`url(#wood-grain-${seed})`} />}
+      {grain && detailed && <path d={art.bark} fill="#000" opacity={0.2} filter={`url(#wood-fine-${seed})`} />}
 
       {/* radial fibers under the rings */}
       {art.fibers.map((f, i) => (

@@ -120,7 +120,7 @@ export default function SearchBar({
       className="anim-rise-x absolute left-4 right-[4.75rem] top-[calc(1.25rem+env(safe-area-inset-top))] z-30 sm:left-1/2 sm:right-auto sm:top-5 sm:-translate-x-1/2"
     >
       <div className="relative w-full sm:w-[min(92vw,380px)]">
-        <div className="relative overflow-hidden rounded-full border border-white/12 bg-[#0d1410]/55 shadow-2xl shadow-black/35 backdrop-blur-2xl transition focus-within:border-[#9fd272]/55 focus-within:bg-[#0d1410]/72">
+        <div className="relative overflow-hidden rounded-full border border-white/12 bg-[#0d1410]/82 shadow-2xl shadow-black/35 transition focus-within:border-[#9fd272]/55 focus-within:bg-[#0d1410]/90">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_50%,rgba(159,210,114,0.24),transparent_34%),linear-gradient(90deg,rgba(255,255,255,0.08),transparent_42%)] opacity-70" />
           <SearchIcon className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#b9e78b]" />
           <input
@@ -166,7 +166,7 @@ export default function SearchBar({
         {open && (
           <div
             ref={panelRef}
-            className="absolute left-0 right-0 top-[calc(100%+8px)] overflow-hidden rounded-2xl border border-white/12 bg-[#0a100d]/82 text-left opacity-0 shadow-2xl shadow-black/55 backdrop-blur-2xl"
+            className="absolute left-0 right-0 top-[calc(100%+8px)] overflow-hidden rounded-2xl border border-white/12 bg-[#0a100d]/94 text-left opacity-0 shadow-2xl shadow-black/55"
             onMouseDown={(e) => e.preventDefault()}
           >
             <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(159,210,114,0.16),transparent_34%),radial-gradient(circle_at_88%_12%,rgba(230,178,90,0.18),transparent_28%)]" />
@@ -229,7 +229,7 @@ export default function SearchBar({
         )}
 
         {focused && results.length === 0 && (
-          <div className="absolute left-0 right-0 top-[calc(100%+8px)] rounded-2xl border border-white/10 bg-[#0a100d]/82 px-4 py-3 text-center text-xs text-white/45 shadow-xl shadow-black/40 backdrop-blur-2xl">
+          <div className="absolute left-0 right-0 top-[calc(100%+8px)] rounded-2xl border border-white/10 bg-[#0a100d]/94 px-4 py-3 text-center text-xs text-white/45 shadow-xl shadow-black/40">
             {t("search.empty")}
           </div>
         )}

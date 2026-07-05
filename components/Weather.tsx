@@ -259,12 +259,14 @@ function StormClouds({
   wind,
   gust,
   windVec,
+  moving = false,
 }: {
   active: boolean;
   flashRef: React.MutableRefObject<number>;
   wind: number;
   gust: number;
   windVec: [number, number];
+  moving?: boolean;
 }) {
   const layout = useMemo(
     () =>
@@ -293,8 +295,20 @@ function StormClouds({
       }),
     [],
   );
+  const frameSkip = useRef(0);
+  const dtAcc = useRef(0);
 
   useFrame((state, dt) => {
+    if (moving) {
+      dtAcc.current += dt;
+      frameSkip.current = (frameSkip.current + 1) % 2;
+      if (frameSkip.current !== 0) return;
+      dt = dtAcc.current;
+      dtAcc.current = 0;
+    } else {
+      dtAcc.current = 0;
+      frameSkip.current = 0;
+    }
     const t = state.clock.elapsedTime;
     mat.emissiveIntensity = flashRef.current * 1.6;
     for (let i = 0; i < layout.length; i++) {
@@ -339,15 +353,19 @@ function StormClouds({
 function Lightning({
   flashRef,
   active,
+  moving = false,
 }: {
   flashRef: React.MutableRefObject<number>;
   active: boolean;
+  moving?: boolean;
 }) {
   const light = useRef<THREE.PointLight>(null);
   const ambient = useRef<THREE.AmbientLight>(null);
   const bolt = useRef<THREE.LineSegments>(null);
   const next = useRef(1.5);
   const flicker = useRef(0);
+  const frameSkip = useRef(0);
+  const dtAcc = useRef(0);
 
   const SEGMENTS = 14;
   const positions = useMemo(() => new Float32Array(SEGMENTS * 2 * 3), []);
@@ -377,6 +395,16 @@ function Lightning({
   };
 
   useFrame((state, dt) => {
+    if (moving) {
+      dtAcc.current += dt;
+      frameSkip.current = (frameSkip.current + 1) % 2;
+      if (frameSkip.current !== 0) return;
+      dt = dtAcc.current;
+      dtAcc.current = 0;
+    } else {
+      dtAcc.current = 0;
+      frameSkip.current = 0;
+    }
     const t = state.clock.elapsedTime;
     if (!active) {
       next.current = t + 1.5;
@@ -438,6 +466,7 @@ export function Weather({
   windVec = [1, 0],
   storm = false,
   budget = 1,
+  moving = false,
 }: {
   precip: Precip;
   intensity: number;
@@ -447,6 +476,7 @@ export function Weather({
   storm?: boolean;
   /** 0..1 PerformanceMonitor budget — scales particle counts under load. */
   budget?: number;
+  moving?: boolean;
 }) {
   const flashRef = useRef(0);
   const profile = useQualityProfile();
@@ -458,8 +488,8 @@ export function Weather({
     <>
       {precip === "snow" && <Snow intensity={intensity} wind={wind} gust={gust} windVec={windVec} max={snowMax} />}
       {isRain && <Rain intensity={intensity} wind={wind} gust={gust} windVec={windVec} max={rainMax} />}
-      <StormClouds active={isRain} flashRef={flashRef} wind={wind} gust={gust} windVec={windVec} />
-      <Lightning flashRef={flashRef} active={storm} />
+      <StormClouds active={isRain} flashRef={flashRef} wind={wind} gust={gust} windVec={windVec} moving={moving} />
+      <Lightning flashRef={flashRef} active={storm} moving={moving} />
     </>
   );
 }

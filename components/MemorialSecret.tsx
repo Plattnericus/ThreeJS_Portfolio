@@ -187,7 +187,7 @@ export default function MemorialSecret({ onClose }: { onClose: () => void }) {
 
       <div
         ref={cardRef}
-        className="memorial-card relative z-10 w-full max-w-[900px] overflow-hidden rounded-2xl border border-[#e7dcc6]/16 bg-[#15110d]/90 p-3 text-[#f5ecd8] shadow-2xl shadow-black/65 backdrop-blur-xl sm:p-4"
+        className="memorial-card relative z-10 w-full max-w-[900px] overflow-hidden rounded-2xl border border-[#e7dcc6]/16 bg-[#15110d]/94 p-3 text-[#f5ecd8] shadow-2xl shadow-black/65 sm:p-4"
         onClick={(e) => e.stopPropagation()}
       >
         <span className="memorial-card-sheen" aria-hidden />

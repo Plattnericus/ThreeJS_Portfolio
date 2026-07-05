@@ -14,6 +14,7 @@ import { I18nProvider, useI18n } from "@/lib/i18n";
 import { useCoarsePointer } from "@/lib/useCoarsePointer";
 import SearchBar from "@/components/SearchBar";
 import HouseInterior from "@/components/HouseInterior";
+import HouseFocusUI from "@/components/HouseFocusUI";
 import MemorialSecret from "@/components/MemorialSecret";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import { FlyIcon } from "@/components/Icons";
@@ -59,7 +60,7 @@ function detectGraphicsQuality(): ResolvedGraphicsQuality {
   const dpr = window.devicePixelRatio || 1;
 
   if (touchFirst || cores <= 4 || memory <= 4) return "low";
-  if (cores >= 8 && memory >= 8 && dpr >= 1.5) return "high";
+  if (cores >= 12 && memory >= 12 && dpr <= 1.5 && window.innerWidth >= 1280) return "high";
   return "medium";
 }
 
@@ -91,6 +92,8 @@ function Home() {
   const [search, setSearch] = useState("");
   const [searchActive, setSearchActive] = useState(-1);
   const [fly, setFly] = useState(false);
+  const [focusedHouse, setFocusedHouse] = useState<number | null>(null);
+  const [infoOpen, setInfoOpen] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const [secretOpen, setSecretOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -114,7 +117,7 @@ function Home() {
     return () => window.clearTimeout(id);
   }, []);
 
-  // ONE Escape hierarchy for the whole HUD: memorial → house panel → menu.
+  // ONE Escape hierarchy for the whole HUD: memorial → info → house panel → focus → menu.
   // Fly mode is excluded — there Esc releases the pointer lock.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -124,15 +127,35 @@ function Home() {
         setSecretOpen(false);
         return;
       }
+      if (infoOpen) {
+        setInfoOpen(false);
+        return;
+      }
       if (selected !== null) {
         setSelected(null);
+        return;
+      }
+      if (focusedHouse !== null) {
+        setFocusedHouse(null);
+        setSearchActive(-1);
         return;
       }
       setMenuOpen((open) => !open);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [fly, secretOpen, selected]);
+  }, [fly, focusedHouse, infoOpen, secretOpen, selected]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "i" || isTextInputTarget(event.target) || fly) return;
+      if (focusedHouse === null || selected !== null || secretOpen || menuOpen) return;
+      event.preventDefault();
+      setInfoOpen((open) => !open);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fly, focusedHouse, menuOpen, secretOpen, selected]);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(GRAPHICS_STORAGE_KEY);
@@ -290,7 +313,30 @@ function Home() {
     }
   }, [searchActive, searchResults]);
 
-  const highlight = searchActive;
+  useEffect(() => {
+    const activeCount = Math.max(0, Math.floor(stars));
+    if (focusedHouse !== null && focusedHouse >= activeCount) {
+      setFocusedHouse(null);
+      setInfoOpen(false);
+      setSearchActive(-1);
+    }
+    if (selected !== null && selected >= activeCount) setSelected(null);
+  }, [focusedHouse, selected, stars]);
+
+  const handleHouseClick = (index: number) => {
+    setSearchActive(index);
+    if (focusedHouse === index) {
+      setInfoOpen(false);
+      setSelected(index);
+      return;
+    }
+    setFocusedHouse(index);
+    setInfoOpen(false);
+    setSelected(null);
+  };
+
+  const highlight = focusedHouse ?? searchActive;
+  const overlayOpen = menuOpen || selected !== null || secretOpen || infoOpen;
 
   return (
     <main className="relative h-full w-full overflow-hidden">
@@ -304,10 +350,12 @@ function Home() {
             stars={stars}
             params={params}
             highlight={highlight}
+            focusedHouse={focusedHouse}
             fly={fly}
             stargazers={stargazers}
             graphicsQuality={resolvedGraphicsQuality}
-            onSelectHouse={setSelected}
+            uiOverlayOpen={overlayOpen}
+            onSelectHouse={handleHouseClick}
             onFindDove={() => setSecretOpen(true)}
             onReady={() => setSceneReady(true)}
           />
@@ -335,6 +383,8 @@ function Home() {
           onSelect={(result) => {
             setSearch(result.name);
             setSearchActive(result.index);
+            setFocusedHouse(result.index);
+            setInfoOpen(false);
             setSelected(result.index);
           }}
         />
@@ -344,7 +394,7 @@ function Home() {
         {!coarse && (
           <button
             onClick={() => setFly((f) => !f)}
-            className={`anim-rise-x absolute bottom-[calc(5rem+env(safe-area-inset-bottom))] left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border px-4 py-2 text-xs backdrop-blur-xl transition active:scale-95 sm:bottom-[calc(1.5rem+env(safe-area-inset-bottom))] ${
+            className={`anim-rise-x absolute bottom-[calc(5rem+env(safe-area-inset-bottom))] left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border px-4 py-2 text-xs transition active:scale-95 sm:bottom-[calc(1.5rem+env(safe-area-inset-bottom))] ${
               fly
                 ? "border-white/25 bg-white/15 text-white"
                 : "border-white/10 bg-white/[0.06] text-white/70 hover:bg-white/10 hover:text-white"
@@ -365,6 +415,25 @@ function Home() {
             index={selected}
             stargazer={stargazers?.[selected] ?? null}
             onClose={() => setSelected(null)}
+          />
+        )}
+        {focusedHouse !== null && selected === null && !secretOpen && !menuOpen && (
+          <HouseFocusUI
+            index={focusedHouse}
+            stargazer={stargazers?.[focusedHouse] ?? null}
+            stargazers={stargazers}
+            infoOpen={infoOpen}
+            onOpenInfo={() => setInfoOpen(true)}
+            onCloseInfo={() => setInfoOpen(false)}
+            onOpenProfile={() => {
+              setInfoOpen(false);
+              setSelected(focusedHouse);
+            }}
+            onClearFocus={() => {
+              setInfoOpen(false);
+              setFocusedHouse(null);
+              setSearchActive(-1);
+            }}
           />
         )}
         <Clock
@@ -410,22 +479,15 @@ function Home() {
         />
       </div>
 
-      {/* Filmic finish: soft anamorphic-style vignette + a whisper of film
-          grain. Pure DOM overlays — zero GPU pipeline cost. */}
+      {/* Filmic finish: soft anamorphic-style vignette. Keep this as a simple
+          gradient; full-screen blend/noise layers force costly compositing over
+          WebGL while the camera moves. */}
       <div
         className="pointer-events-none absolute inset-0 z-[8]"
         style={{
           background: `radial-gradient(ellipse at center, transparent ${
             resolvedGraphicsQuality === "extreme" ? "56%" : "62%"
           }, rgba(4,2,0,${resolvedGraphicsQuality === "extreme" ? 0.3 : 0.2}) 100%)`,
-        }}
-      />
-      <div
-        className="pointer-events-none absolute inset-0 z-[8] mix-blend-overlay"
-        style={{
-          opacity: 0.05,
-          backgroundImage:
-            "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23g)'/%3E%3C/svg%3E\")",
         }}
       />
     </main>

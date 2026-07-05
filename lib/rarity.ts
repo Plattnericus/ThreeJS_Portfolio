@@ -18,6 +18,13 @@ export const TIER_COLOR: Record<Tier, string> = {
   legendary: "#e0a04a",
 };
 
+const TIER_RANK: Record<Tier, number> = {
+  common: 0,
+  uncommon: 1,
+  rare: 2,
+  legendary: 3,
+};
+
 // House/platform size per tier (rarer = bigger). Single source of truth shared by
 // Houses, Bridges, Ants and the Tree (leaf-collision + bridge anchoring).
 export const TIER_SIZE: Record<Tier, number> = {
@@ -48,6 +55,14 @@ export function tierForIndex(i: number): Tier {
   if (r > 0.78) return "rare";
   if (r > 0.5) return "uncommon";
   return "common";
+}
+
+export function maxTier(a: Tier | undefined, b: Tier): Tier {
+  return !a || TIER_RANK[b] > TIER_RANK[a] ? b : a;
+}
+
+export function tierFromContributor(commits: number): Tier {
+  return commits >= 12 ? "legendary" : "rare";
 }
 
 // ---- Real rarity from the stargazer's GitHub profile --------------------------
@@ -82,7 +97,7 @@ export function rarityScore(p: RarityInput): number {
  */
 export function tierFromProfile(p: RarityInput): Tier {
   const s = rarityScore(p);
-  if (p.isContributor) return s >= 6.8 ? "legendary" : "rare";
+  if (p.isContributor) return maxTier(s >= 6.8 ? "legendary" : "rare", tierFromContributor(p.commits));
   if (s >= 6.0) return "legendary";
   if (s >= 3.6) return "rare";
   if (s >= 1.8) return "uncommon";
