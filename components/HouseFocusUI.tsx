@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import gsap from "gsap";
 import type { Stargazer } from "@/lib/stargazers";
 import { nameForIndex } from "@/lib/names";
@@ -838,6 +838,36 @@ function HouseInfoPanel({
   const overlayRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
+  // Followers are only enriched server-side when a GitHub token is present, so
+  // fetch them live from /api/gh-user when the card opens (never hardcoded).
+  const login = stargazer?.login;
+  const [followers, setFollowers] = useState<number | null>(
+    typeof stargazer?.followers === "number" ? stargazer.followers : null,
+  );
+  const [followersLoading, setFollowersLoading] = useState(false);
+  useEffect(() => {
+    if (typeof stargazer?.followers === "number") {
+      setFollowers(stargazer.followers);
+      return;
+    }
+    setFollowers(null);
+    if (!login) return;
+    let alive = true;
+    setFollowersLoading(true);
+    fetch(`/api/gh-user?login=${encodeURIComponent(login)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("gh-user"))))
+      .then((d) => {
+        if (alive && typeof d.followers === "number") setFollowers(d.followers);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setFollowersLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [login, stargazer?.followers]);
+
   useEffect(() => {
     const overlay = overlayRef.current;
     const panel = panelRef.current;
@@ -919,21 +949,22 @@ function HouseInfoPanel({
         <div data-info-item className="mt-4 space-y-2 text-left">
           <TraitRow label={facts.copy.building} value={facts.building} accent={facts.color} chip={facts.tierLabel} />
           <TraitRow label={facts.copy.size} value={`${facts.size.toFixed(2)}×`} chip={`${facts.copy.deck} ${facts.deck.toFixed(1)}`} />
-          {facts.contributor ? (
+          <TraitRow
+            label={facts.copy.followers}
+            value={
+              followers !== null
+                ? numberOrDash(followers, facts.locale)
+                : followersLoading
+                  ? "…"
+                  : facts.copy.unknown
+            }
+          />
+          {facts.contributor && (
             <TraitRow
               label={facts.copy.contributor}
               value={facts.copy.yes}
               accent={CONTRIBUTOR_ACCENT.color}
               chip={`${numberOrDash(facts.commits, facts.locale)} ${facts.copy.commits}`}
-            />
-          ) : (
-            <TraitRow
-              label={facts.copy.followers}
-              value={
-                typeof facts.followers === "number"
-                  ? numberOrDash(facts.followers, facts.locale)
-                  : facts.copy.unknown
-              }
             />
           )}
         </div>

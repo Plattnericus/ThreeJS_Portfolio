@@ -10,16 +10,18 @@ import {
   type GraphicsQuality,
   type ResolvedGraphicsQuality,
 } from "@/lib/quality";
-import { I18nProvider, useI18n } from "@/lib/i18n";
+import { I18nProvider, useI18n, type Locale } from "@/lib/i18n";
 import { useCoarsePointer } from "@/lib/useCoarsePointer";
 import SearchBar from "@/components/SearchBar";
 import HouseInterior from "@/components/HouseInterior";
 import HouseFocusUI from "@/components/HouseFocusUI";
+import GameHUD from "@/components/GameHUD";
 import MemorialSecret from "@/components/MemorialSecret";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import { FlyIcon } from "@/components/Icons";
+import { type CamMode } from "@/lib/cameraBus";
 import { nameForHouse, type Stargazer } from "@/lib/stargazers";
-import { resolveTier } from "@/lib/rarity";
+import { resolveTier, TIER_RANK } from "@/lib/rarity";
 import { nowInZone } from "@/lib/astro";
 import { GOSSENSASS } from "@/lib/location";
 
@@ -65,6 +67,35 @@ function detectGraphicsQuality(): ResolvedGraphicsQuality {
   return "medium";
 }
 
+// Camera-mode labels (localized for the primary locales; falls back to English).
+const MODE_LABELS: Partial<Record<Locale, Record<"orbit" | "fly" | "walk", string>>> = {
+  de: { orbit: "Ansicht", fly: "Fliegen", walk: "Gehen" },
+  en: { orbit: "Orbit", fly: "Fly", walk: "Walk" },
+  it: { orbit: "Vista", fly: "Vola", walk: "Cammina" },
+  es: { orbit: "Vista", fly: "Volar", walk: "Andar" },
+  fr: { orbit: "Vue", fly: "Voler", walk: "Marcher" },
+};
+
+function OrbitIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+      <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />
+      <ellipse cx="12" cy="12" rx="9" ry="4.2" />
+    </svg>
+  );
+}
+
+function WalkIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="13" cy="4.4" r="1.7" fill="currentColor" stroke="none" />
+      <path d="M12.5 8l-2 4 2 1.8 1 5.2" />
+      <path d="M12.5 8l3 2.2 3-1" />
+      <path d="M10.5 12l-3.2 1-1 4" />
+    </svg>
+  );
+}
+
 export default function Page() {
   return (
     <I18nProvider>
@@ -74,7 +105,7 @@ export default function Page() {
 }
 
 function Home() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const coarse = useCoarsePointer();
   const [stars, setStars] = useState(0);
   const [starsLive, setStarsLive] = useState(false);
@@ -92,7 +123,8 @@ function Home() {
   const [manualSky, setManualSky] = useState<Sky>("clear");
   const [search, setSearch] = useState("");
   const [searchActive, setSearchActive] = useState(-1);
-  const [fly, setFly] = useState(false);
+  const [camMode, setCamMode] = useState<CamMode>("orbit");
+  const flying = camMode !== "orbit";
   const [focusedHouse, setFocusedHouse] = useState<number | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
@@ -122,7 +154,7 @@ function Home() {
   // Fly mode is excluded — there Esc releases the pointer lock.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || isTextInputTarget(event.target) || fly) return;
+      if (event.key !== "Escape" || isTextInputTarget(event.target) || flying) return;
       event.preventDefault();
       if (secretOpen) {
         setSecretOpen(false);
@@ -145,18 +177,18 @@ function Home() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [fly, focusedHouse, infoOpen, secretOpen, selected]);
+  }, [flying, focusedHouse, infoOpen, secretOpen, selected]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() !== "i" || isTextInputTarget(event.target) || fly) return;
+      if (event.key.toLowerCase() !== "i" || isTextInputTarget(event.target) || flying) return;
       if (focusedHouse === null || selected !== null || secretOpen || menuOpen) return;
       event.preventDefault();
       setInfoOpen((open) => !open);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [fly, focusedHouse, menuOpen, secretOpen, selected]);
+  }, [flying, focusedHouse, menuOpen, secretOpen, selected]);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(GRAPHICS_STORAGE_KEY);
@@ -297,8 +329,14 @@ function Home() {
         contributor: Boolean(gazer?.contributor),
       };
     });
-    if (!q) return all;
-    return all.filter((result) => result.name.toLowerCase().includes(q));
+    const filtered = q
+      ? all.filter((result) => result.name.toLowerCase().includes(q))
+      : all;
+    // Sort by rarity — legendary first, then rare/uncommon/common — with star
+    // order (index) breaking ties so the list stays stable.
+    return filtered.sort(
+      (a, b) => TIER_RANK[b.tier] - TIER_RANK[a.tier] || a.index - b.index,
+    );
   }, [search, stargazers, stars]);
 
   useEffect(() => {
@@ -337,6 +375,7 @@ function Home() {
   };
 
   const highlight = focusedHouse ?? searchActive;
+  const modeLabels = MODE_LABELS[locale] ?? MODE_LABELS.en!;
   const overlayOpen = menuOpen || selected !== null || secretOpen || infoOpen;
 
   return (
@@ -352,7 +391,7 @@ function Home() {
             params={params}
             highlight={highlight}
             focusedHouse={focusedHouse}
-            fly={fly}
+            camMode={camMode}
             stargazers={stargazers}
             graphicsQuality={resolvedGraphicsQuality}
             uiOverlayOpen={overlayOpen}
@@ -382,34 +421,49 @@ function Home() {
           activeIndex={highlight}
           onActive={setSearchActive}
           onSelect={(result) => {
+            // Picking a search result FOCUSES the house (camera flies + focus
+            // card) — it does NOT open GitHub. The house click opens the profile.
             setSearch(result.name);
             setSearchActive(result.index);
             setFocusedHouse(result.index);
             setInfoOpen(false);
-            setSelected(result.index);
+            setSelected(null);
           }}
         />
 
-        {/* Fly mode is pointer-lock + WASD — unusable on touch, so it is
-            desktop-only. */}
+        {/* Camera mode: orbit view · free fly · first-person walk. Fly/walk are
+            pointer-lock + WASD, so this switch is desktop-only. */}
         {!coarse && (
-          <button
-            onClick={() => setFly((f) => !f)}
-            className={`anim-rise-x absolute bottom-[calc(5rem+env(safe-area-inset-bottom))] left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border px-4 py-2 text-xs transition active:scale-95 sm:bottom-[calc(1.5rem+env(safe-area-inset-bottom))] ${
-              fly
-                ? "border-white/25 bg-white/15 text-white"
-                : "border-white/10 bg-white/[0.06] text-white/70 hover:bg-white/10 hover:text-white"
-            }`}
-          >
-            <FlyIcon className="h-3.5 w-3.5" />
-            {fly ? t("fly.exit") : t("fly.enter")}
-          </button>
-        )}
-        {fly && !coarse && (
-          <div className="pointer-events-none absolute bottom-32 left-1/2 -translate-x-1/2 text-center text-[11px] text-white/45 sm:bottom-16">
-            {t("fly.hint")}
+          <div className="anim-rise-x absolute bottom-[calc(5rem+env(safe-area-inset-bottom))] left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-white/10 bg-[#0b100d]/72 p-1 shadow-xl shadow-black/40 backdrop-blur-sm sm:bottom-[calc(1.5rem+env(safe-area-inset-bottom))]">
+            {(["orbit", "fly", "walk"] as const).map((m) => {
+              const active = camMode === m;
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setCamMode(m)}
+                  aria-label={modeLabels[m]}
+                  aria-pressed={active}
+                  className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition active:scale-95 ${
+                    active
+                      ? "bg-white/15 text-white shadow-inner shadow-white/10"
+                      : "text-white/55 hover:text-white"
+                  }`}
+                >
+                  {m === "orbit" ? (
+                    <OrbitIcon className="h-3.5 w-3.5" />
+                  ) : m === "fly" ? (
+                    <FlyIcon className="h-3.5 w-3.5" />
+                  ) : (
+                    <WalkIcon className="h-3.5 w-3.5" />
+                  )}
+                  <span className="hidden sm:inline">{modeLabels[m]}</span>
+                </button>
+              );
+            })}
           </div>
         )}
+        {flying && !coarse && <GameHUD mode={camMode === "walk" ? "walk" : "fly"} />}
 
         {selected !== null && (
           <HouseInterior
@@ -444,7 +498,7 @@ function Home() {
           sunset={liveWeather?.sunset}
           onOpenMenu={() => setMenuOpen(true)}
         />
-        <RotateControls fly={fly} />
+        <RotateControls fly={flying} />
         <SettingsMenu
           weather={weather}
           mode={mode}

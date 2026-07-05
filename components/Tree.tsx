@@ -364,6 +364,7 @@ type LeafUniforms = {
   uLeafTint: { value: THREE.Color };
   uWet: { value: number };
   uCloudCover: { value: number };
+  uAerial: { value: number };
 };
 
 // Procedural leaf-card atlas (2×2 tiles): three veined leaf CLUSTERS plus one
@@ -526,6 +527,7 @@ uniform float uSnow;
 uniform vec3 uLeafTint;
 uniform float uWet;
 uniform float uCloudCover;
+uniform float uAerial;
 varying vec3 vLeaf;
 varying vec3 vWPos;
 ` +
@@ -565,7 +567,15 @@ varying vec3 vWPos;
         totalEmissiveRadiance += uSunColor * (backlit * uSSS * thin * vLeaf.x) * diffuseColor.rgb * vec3(0.90, 1.00, 0.45);
         // Sky rim keeps the crown silhouette readable against the dome.
         float rim = pow(1.0 - clamp(dot(leafV, normalize(vNormal)), 0.0, 1.0), 3.0);
-        totalEmissiveRadiance += rim * uSunColor * 0.06 * vLeaf.x;`,
+        totalEmissiveRadiance += rim * uSunColor * 0.06 * vLeaf.x;
+        // Aerial perspective: a warm sun-lit haze builds on the DISTANT crown as
+        // a depth cue. Purely additive — it can only add light, never blank the
+        // canopy — and it's gated by uAerial (0 on low/medium).
+        float aeD = length(vWPos - cameraPosition);
+        float aeHaze = (1.0 - exp(-aeD * 0.013)) * uAerial;
+        vec3 aeView = normalize(vWPos - cameraPosition);
+        float aeSun = max(dot(aeView, normalize(uSunDirW)), 0.0);
+        totalEmissiveRadiance += uSunColor * aeHaze * (0.2 + 0.8 * pow(aeSun, 3.0)) * 0.5;`,
         );
   };
   return mat;
@@ -735,6 +745,7 @@ export function Tree({
     uLeafTint: { value: new THREE.Color("#ffffff") },
     uWet: { value: 0 },
     uCloudCover: { value: 0 },
+    uAerial: { value: 0 },
   });
 
   const materials = useMemo(
@@ -793,7 +804,8 @@ export function Tree({
     // Translucency swells toward the golden hour and dies with the sun.
     u.uSSS.value =
       (0.16 + twilight * 0.85) * THREE.MathUtils.clamp(sunIntensity, 0, 1);
-  }, [leafColor, snow, twilight, sunColor, sunIntensity]);
+    u.uAerial.value = quality.aerial;
+  }, [leafColor, snow, twilight, sunColor, sunIntensity, quality.aerial]);
 
   // Trunk follows the procedural spine and grows with the tower. All static
   // wood (trunk + stubs, roots, ring caps) is merged into ONE geometry per

@@ -40,6 +40,7 @@ import { SceneRig } from "./SceneRig";
 import { Sky } from "./Sky";
 import { NightSky } from "./NightSky";
 import { CozyFlyControls } from "./CozyFlyControls";
+import { WalkControls } from "./WalkControls";
 import { treeHeight } from "@/lib/growth";
 import { spineAt } from "@/lib/bonsai";
 import { MAX_HOUSES } from "@/lib/layout";
@@ -59,6 +60,7 @@ import {
   ROTATE_SPEED,
   TILT_SPEED,
   ZOOM_FOV,
+  type CamMode,
 } from "@/lib/cameraBus";
 
 // Shared scene scale for the island and tree.
@@ -476,7 +478,7 @@ export default function Experience({
   params,
   highlight = -1,
   focusedHouse = null,
-  fly = false,
+  camMode = "orbit",
   stargazers = null,
   graphicsQuality = "medium",
   uiOverlayOpen = false,
@@ -488,7 +490,7 @@ export default function Experience({
   params: SceneParams;
   highlight?: number;
   focusedHouse?: number | null;
-  fly?: boolean;
+  camMode?: CamMode;
   stargazers?: Stargazer[] | null;
   graphicsQuality?: Quality;
   uiOverlayOpen?: boolean;
@@ -516,7 +518,8 @@ export default function Experience({
   const [shadowFallback, setShadowFallback] = useState(false);
   const [cameraMoving, setCameraMoving] = useState(false);
   const settleTimer = useRef<number | null>(null);
-  const interactionMoving = fly || cameraMoving;
+  const flying = camMode !== "orbit";
+  const interactionMoving = flying || cameraMoving;
   const performanceMoving = interactionMoving || uiOverlayOpen;
   const motionDpr = Math.min(dpr, quality.movingDpr);
   const effectiveDpr = interactionMoving
@@ -707,7 +710,7 @@ export default function Experience({
           quality={effectiveCloudQuality}
           moving={performanceMoving}
         />
-        <Dove interactive={!fly} onFind={onFindDove} moving={performanceMoving} />
+        <Dove interactive={!flying} onFind={onFindDove} moving={performanceMoving} />
 
         <Float
           speed={performanceMoving ? 0 : 1.1}
@@ -751,7 +754,7 @@ export default function Experience({
                 focused={focusedHouse}
                 night={night}
                 stargazers={stargazers}
-                interactive={!fly}
+                interactive={!flying}
                 onSelect={onSelectHouse}
                 moving={performanceMoving}
               />
@@ -794,17 +797,15 @@ export default function Experience({
       </Suspense>
       </QualityContext.Provider>
 
-      {!fly && <CameraRotateDriver />}
-      {!fly && (
+      {!flying && <CameraRotateDriver />}
+      {!flying && (
         <CameraFocusRig
           defaultTarget={orbitTarget}
           focusTarget={focusTarget}
           focusKey={focusedHouse}
         />
       )}
-      {fly ? (
-        <CozyFlyControls speed={8} />
-      ) : (
+      {camMode === "orbit" ? (
         <OrbitControls
           makeDefault
           target={orbitTarget}
@@ -819,6 +820,10 @@ export default function Experience({
           onStart={markCameraMoving}
           onEnd={markCameraSettling}
         />
+      ) : camMode === "walk" ? (
+        <WalkControls speed={6} stars={stars} stargazers={stargazers} />
+      ) : (
+        <CozyFlyControls speed={8} />
       )}
     </Canvas>
   );

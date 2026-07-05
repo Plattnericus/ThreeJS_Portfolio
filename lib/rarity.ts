@@ -18,7 +18,7 @@ export const TIER_COLOR: Record<Tier, string> = {
   legendary: "#e0a04a",
 };
 
-const TIER_RANK: Record<Tier, number> = {
+export const TIER_RANK: Record<Tier, number> = {
   common: 0,
   uncommon: 1,
   rare: 2,

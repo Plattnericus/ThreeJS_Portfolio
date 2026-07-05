@@ -1,6 +1,8 @@
 // Tiny mutable bus connecting the DOM rotate controls (buttons + arrow keys)
 // to the OrbitControls driver inside the Canvas — no React state per frame.
 
+export type CamMode = "orbit" | "fly" | "walk";
+
 export const cameraBus = {
   rotate: 0 as -1 | 0 | 1, // ◀ ▶ / ← →  orbit left-right
   tilt: 0 as -1 | 0 | 1, // ▲ ▼ / ↑ ↓  orbit up-down
