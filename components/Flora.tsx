@@ -123,6 +123,7 @@ export function Flora({
       }
       bush.instanceMatrix.needsUpdate = true;
       if (bush.instanceColor) bush.instanceColor.needsUpdate = true;
+      bush.computeBoundingSphere();
     }
 
     const bloom = bloomRef.current;
@@ -145,6 +146,8 @@ export function Flora({
       bloom.instanceMatrix.needsUpdate = true;
       stem.instanceMatrix.needsUpdate = true;
       if (bloom.instanceColor) bloom.instanceColor.needsUpdate = true;
+      bloom.computeBoundingSphere();
+      stem.computeBoundingSphere();
     }
   }, [radius, topY, surface, BUSHES, FLOWERS]);
 
@@ -155,17 +158,14 @@ export function Flora({
         args={[bushGeo, bushMat, BUSHES]}
         castShadow
         receiveShadow
-        frustumCulled={false}
       />
       <instancedMesh
         ref={stemRef}
         args={[stemGeo, stemMat, FLOWERS]}
-        frustumCulled={false}
       />
       <instancedMesh
         ref={bloomRef}
         args={[bloomGeo, bloomMat, FLOWERS]}
-        frustumCulled={false}
       />
     </group>
   );

@@ -417,13 +417,20 @@ export function Houses({
   const makeBuilding = useBuildingFactory();
   const { scene: lanternScene } = useGLTF(LANTERN);
   const anchors = useMemo(() => sampleBranchAnchors(null, MAX_HOUSES), []);
+  const baseY = useMemo(() => anchors.map((anchor) => anchor.pos.y + 0.35), [anchors]);
 
   const groups = useRef<(THREE.Group | null)[]>([]);
+  const lastLoopCount = useRef(0);
   const active = Math.min(anchors.length, Math.max(0, Math.floor(stars)));
 
   useFrame((state) => {
     const t = state.clock.elapsedTime;
-    for (let i = 0; i < anchors.length; i++) {
+    const loopCount = Math.min(
+      anchors.length,
+      Math.max(active, lastLoopCount.current, highlight + 1),
+    );
+    let nextLoopCount = active;
+    for (let i = 0; i < loopCount; i++) {
       const grp = groups.current[i];
       if (!grp) continue;
       const isHi = i === highlight;
@@ -433,8 +440,10 @@ export function Houses({
       grp.visible = grp.scale.x > 0.01;
       // tiny settle bob in place (they're rooted to the branch, not floating)
       grp.position.y =
-        anchors[i].pos.y + 0.35 + Math.sin(t * 0.8 + i) * (isHi ? 0.12 : 0.03);
+        baseY[i] + Math.sin(t * 0.8 + i) * (isHi ? 0.12 : 0.03);
+      if (grp.visible || i < active) nextLoopCount = i + 1;
     }
+    lastLoopCount.current = nextLoopCount;
   });
 
   return (

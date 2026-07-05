@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
@@ -156,6 +156,14 @@ type Model = {
   cross: number;
 };
 
+type SpanTransform = {
+  visible: boolean;
+  position: THREE.Vector3;
+  quaternion: THREE.Quaternion;
+  lanternVisible: boolean;
+  lanternPosition: THREE.Vector3;
+};
+
 function extractModel(scene: THREE.Object3D): Model | null {
   let mesh: THREE.Mesh | null = null;
   scene.traverse((o) => {
@@ -214,9 +222,6 @@ export function Bridges({
     () => (i: number) => TIER_SIZE[resolveTier(i, stargazers)] * 1.5,
     [stargazers],
   );
-  const m4 = useMemo(() => new THREE.Matrix4(), []);
-  const axX = useMemo(() => new THREE.Vector3(), []);
-  const axZ = useMemo(() => new THREE.Vector3(), []);
 
   const active = Math.min(anchors.length, Math.max(0, Math.floor(stars)));
 
@@ -361,20 +366,24 @@ export function Bridges({
     [edges, anchors, deckRadius],
   );
 
-  const refs = useRef<(THREE.Group | null)[]>([]);
-  const lanternRefs = useRef<(THREE.Group | null)[]>([]);
-  const a3 = useMemo(() => new THREE.Vector3(), []);
-  const b3 = useMemo(() => new THREE.Vector3(), []);
-  const mid = useMemo(() => new THREE.Vector3(), []);
-  const dir = useMemo(() => new THREE.Vector3(), []);
-  const dirH = useMemo(() => new THREE.Vector3(), []);
+  const transforms = useMemo<SpanTransform[]>(() => {
+    const matrix = new THREE.Matrix4();
+    const axX = new THREE.Vector3();
+    const axZ = new THREE.Vector3();
+    const a3 = new THREE.Vector3();
+    const b3 = new THREE.Vector3();
+    const mid = new THREE.Vector3();
+    const dir = new THREE.Vector3();
+    const dirH = new THREE.Vector3();
 
-  useFrame((state) => {
-    const t = state.clock.elapsedTime;
-    edges.forEach(([i, j, isLadder], k) => {
-      const g = refs.current[k];
-      const lg = lanternRefs.current[k];
-      if (!g) return;
+    return edges.map(([i, j, isLadder]) => {
+      const out: SpanTransform = {
+        visible: true,
+        position: new THREE.Vector3(),
+        quaternion: new THREE.Quaternion(),
+        lanternVisible: true,
+        lanternPosition: new THREE.Vector3(),
+      };
 
       if (isLadder) {
         const lo = anchors[i].pos.y <= anchors[j].pos.y ? i : j;
@@ -404,32 +413,18 @@ export function Bridges({
           );
         }
         mid.copy(a3).add(b3).multiplyScalar(0.5);
-        dir.copy(b3).sub(a3);
-        const dist = dir.length() || 1;
-        dir.normalize();
-        g.visible = true;
-        g.position.copy(mid);
-        // Proper upright basis: Y = climb direction, X = horizontal rungs across
-        // it, Z = the face you climb — so rungs are level and never twisted.
+        dir.copy(b3).sub(a3).normalize();
         axX.crossVectors(WORLD_UP, dir);
         if (axX.lengthSq() < 1e-4) axX.set(1, 0, 0);
         axX.normalize();
         axZ.crossVectors(axX, dir).normalize();
-        m4.makeBasis(axX, dir, axZ);
-        g.quaternion.setFromRotationMatrix(m4);
-        // Geometry is already built to the exact climb length with fixed rungs —
-        // never scale it (that was the stretched look). Just place & orient.
-        g.scale.set(1, 1, 1);
-        void dist;
-        if (lg) {
-          lg.visible = true;
-          lg.position.set(b3.x, b3.y + 0.05, b3.z);
-          lg.rotation.z = Math.sin(t * 0.7 + k) * 0.04;
-        }
-        return;
+        matrix.makeBasis(axX, dir, axZ);
+        out.position.copy(mid);
+        out.quaternion.setFromRotationMatrix(matrix);
+        out.lanternPosition.set(b3.x, b3.y + 0.05, b3.z);
+        return out;
       }
 
-      if (!bridge) return;
       a3.copy(anchors[i].pos);
       a3.y += DECK + WALKWAY_RAISE;
       b3.copy(anchors[j].pos);
@@ -437,40 +432,53 @@ export function Bridges({
       const hd = Math.hypot(b3.x - a3.x, b3.z - a3.z);
       const inset = deckRadius(i) + deckRadius(j);
       if (hd <= inset + 0.25) {
-        g.visible = false;
-        if (lg) lg.visible = false;
-        return;
+        out.visible = false;
+        out.lanternVisible = false;
+        return out;
       }
-      g.visible = true;
-      if (lg) lg.visible = true;
       dirH.set(b3.x - a3.x, 0, b3.z - a3.z).normalize();
-      // Land the ends slightly ONTO each deck (≈18% inside the rim) so the planks
-      // rest on the wood and read as fastened, not floating at the edge.
       a3.addScaledVector(dirH, deckRadius(i) * 0.82);
       b3.addScaledVector(dirH, -deckRadius(j) * 0.82);
       mid.copy(a3).add(b3).multiplyScalar(0.5);
-      dir.copy(b3).sub(a3);
-      const dist = dir.length() || 1;
-      dir.normalize();
-      g.position.copy(mid);
-      g.position.y += 0.02; // rests just above the deck surface
-      // Orient as a CLEAN STRAIGHT RAMP: length along `dir`, deck width kept
-      // horizontal (no banking/twist — that was the crooked look).
+      dir.copy(b3).sub(a3).normalize();
       axZ.crossVectors(dir, WORLD_UP);
       if (axZ.lengthSq() < 1e-4) axZ.set(0, 0, 1);
       axZ.normalize();
       axX.crossVectors(axZ, dir).normalize();
-      m4.makeBasis(dir, axX, axZ);
-      g.quaternion.setFromRotationMatrix(m4);
-      g.scale.set(1, 1, 1); // flat bridge geometry is already built to span length
-      void dist;
-      if (lg) {
-        // Stand it on the planks near the span start. The suspension bridge sags
-        // in the middle, so placing it at the (deck-height) end keeps it from
-        // floating. A tiny sway keeps it alive without reading as detached.
-        lg.position.set(a3.x + dir.x * 0.7, a3.y + 0.05, a3.z + dir.z * 0.7);
-        lg.rotation.z = Math.sin(t * 0.7 + k) * 0.04;
+      matrix.makeBasis(dir, axX, axZ);
+      out.position.copy(mid);
+      out.position.y += 0.02;
+      out.quaternion.setFromRotationMatrix(matrix);
+      out.lanternPosition.set(a3.x + dir.x * 0.7, a3.y + 0.05, a3.z + dir.z * 0.7);
+      return out;
+    });
+  }, [edges, anchors, deckRadius]);
+
+  const refs = useRef<(THREE.Group | null)[]>([]);
+  const lanternRefs = useRef<(THREE.Group | null)[]>([]);
+
+  useLayoutEffect(() => {
+    transforms.forEach((tr, k) => {
+      const g = refs.current[k];
+      const lg = lanternRefs.current[k];
+      if (g) {
+        g.visible = tr.visible;
+        g.position.copy(tr.position);
+        g.quaternion.copy(tr.quaternion);
+        g.scale.set(1, 1, 1);
       }
+      if (lg) {
+        lg.visible = tr.lanternVisible;
+        lg.position.copy(tr.lanternPosition);
+      }
+    });
+  }, [transforms]);
+
+  useFrame((state) => {
+    const t = state.clock.elapsedTime;
+    transforms.forEach((tr, k) => {
+      const lg = lanternRefs.current[k];
+      if (lg && tr.lanternVisible) lg.rotation.z = Math.sin(t * 0.7 + k) * 0.04;
     });
   });
 

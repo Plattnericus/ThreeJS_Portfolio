@@ -45,6 +45,7 @@ export function Fireflies({
     g.setAttribute("aSeed", new THREE.BufferAttribute(seed, 3));
     g.setAttribute("aPhase", new THREE.BufferAttribute(phase, 1));
     g.setAttribute("aTint", new THREE.BufferAttribute(tint, 1));
+    g.computeBoundingSphere();
     return g;
   }, [count, radius, baseY, height]);
 
@@ -114,7 +115,7 @@ export function Fireflies({
   });
 
   return (
-    <points geometry={geometry} frustumCulled={false}>
+    <points geometry={geometry}>
       <primitive object={material} ref={matRef} attach="material" />
     </points>
   );

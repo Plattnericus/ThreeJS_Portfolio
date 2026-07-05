@@ -50,7 +50,15 @@ function roamTarget(out: THREE.Vector3) {
   return out;
 }
 
-export function Birds({ count = 4, stars = 0 }: { count?: number; stars?: number }) {
+export function Birds({
+  count = 4,
+  stars = 0,
+  moving = false,
+}: {
+  count?: number;
+  stars?: number;
+  moving?: boolean;
+}) {
   const { scene: birdScene, animations } = useGLTF(BIRD);
 
   // Real branch tips the birds can land on (procedural tree, tree-local space).
@@ -98,8 +106,10 @@ export function Birds({ count = 4, stars = 0 }: { count?: number; stars?: number
   }, [birds]);
 
   const wrappers = useRef<(THREE.Group | null)[]>([]);
-  const tmpDir = new THREE.Vector3();
-  const tmpSteer = new THREE.Vector3();
+  const tmpDir = useMemo(() => new THREE.Vector3(), []);
+  const tmpSteer = useMemo(() => new THREE.Vector3(), []);
+  const mixerFrame = useRef(0);
+  const mixerAccum = useRef(0);
 
   const pickPerch = (b: Bird) => {
     const free: number[] = [];
@@ -108,7 +118,8 @@ export function Birds({ count = 4, stars = 0 }: { count?: number; stars?: number
     const idx = free[Math.floor(Math.random() * free.length)];
     occupied.current.add(idx);
     b.perchIdx = idx;
-    b.target.copy(perches[idx]).add(new THREE.Vector3(0, 0.16, 0));
+    b.target.copy(perches[idx]);
+    b.target.y += 0.16;
     b.state = "toPerch";
     return true;
   };
@@ -116,6 +127,12 @@ export function Birds({ count = 4, stars = 0 }: { count?: number; stars?: number
   useFrame((state, dtRaw) => {
     const dt = Math.min(dtRaw, 0.05);
     const t = state.clock.elapsedTime;
+    const mixerStride = moving ? 2 : 1;
+    mixerFrame.current += 1;
+    mixerAccum.current += dt;
+    const updateMixers = mixerFrame.current % mixerStride === 0;
+    const mixerDt = mixerAccum.current;
+    if (updateMixers) mixerAccum.current = 0;
     for (let i = 0; i < birds.length; i++) {
       const b = birds[i];
       const g = wrappers.current[i];
@@ -186,7 +203,7 @@ export function Birds({ count = 4, stars = 0 }: { count?: number; stars?: number
       g.rotation.copy(b.rot);
 
       // model's own clip keeps head/tail/feet alive
-      b.mixer.update(dt * (flying ? 1 : 0.85));
+      if (updateMixers) b.mixer.update(mixerDt * (flying ? 1 : 0.85));
     }
   });
 

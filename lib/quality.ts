@@ -64,6 +64,8 @@ export type QualityProfile = {
   antMixerStride: number; // update skinned animations every Nth frame
   // Post
   bloom: boolean; // subtle filmic bloom (lanterns, sun, fireflies)
+  postprocessingSamples: 0 | 2 | 4; // MSAA samples for postprocessing render targets
+  movingBloom: boolean; // keep bloom while the camera is moving
   // 2D extras
   vignette: boolean;
 };
@@ -100,6 +102,8 @@ export const QUALITY_PROFILES: Record<ResolvedGraphicsQuality, QualityProfile> =
     antsTrunk: 10,
     antMixerStride: 2,
     bloom: false,
+    postprocessingSamples: 0,
+    movingBloom: false,
     vignette: false,
   },
   medium: {
@@ -133,18 +137,20 @@ export const QUALITY_PROFILES: Record<ResolvedGraphicsQuality, QualityProfile> =
     antsTrunk: 18,
     antMixerStride: 1,
     bloom: false,
+    postprocessingSamples: 0,
+    movingBloom: false,
     vignette: false,
   },
   high: {
-    minDpr: 1.08,
-    idleDpr: 1.65,
-    maxDpr: 1.9,
-    movingDpr: 1.35,
+    minDpr: 1.0,
+    idleDpr: 1.5,
+    maxDpr: 1.7,
+    movingDpr: 1.22,
     antialias: true,
-    idleCloudQuality: 0.74,
-    movingCloudQuality: 0.16,
+    idleCloudQuality: 0.68,
+    movingCloudQuality: 0.12,
     cloudLayers: 3,
-    cloudMaxSteps: 18,
+    cloudMaxSteps: 16,
     shadowMapSize: 2048,
     shadowType: "pcfsoft",
     leafShadows: "real",
@@ -166,6 +172,8 @@ export const QUALITY_PROFILES: Record<ResolvedGraphicsQuality, QualityProfile> =
     antsTrunk: 26,
     antMixerStride: 1,
     bloom: true,
+    postprocessingSamples: 2,
+    movingBloom: false,
     vignette: false,
   },
   extreme: {
@@ -175,7 +183,7 @@ export const QUALITY_PROFILES: Record<ResolvedGraphicsQuality, QualityProfile> =
     movingDpr: 1.5,
     antialias: true,
     idleCloudQuality: 0.95,
-    movingCloudQuality: 0.26,
+    movingCloudQuality: 0.2,
     cloudLayers: 3,
     cloudMaxSteps: 26,
     shadowMapSize: 4096,
@@ -199,6 +207,8 @@ export const QUALITY_PROFILES: Record<ResolvedGraphicsQuality, QualityProfile> =
     antsTrunk: 30,
     antMixerStride: 1,
     bloom: true,
+    postprocessingSamples: 4,
+    movingBloom: true,
     vignette: true,
   },
 };

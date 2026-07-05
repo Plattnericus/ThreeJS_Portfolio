@@ -159,10 +159,6 @@ export function Grass({
   });
 
   return (
-    <instancedMesh
-      ref={ref}
-      args={[geom, material, count]}
-      frustumCulled={false}
-    />
+    <instancedMesh ref={ref} args={[geom, material, count]} />
   );
 }

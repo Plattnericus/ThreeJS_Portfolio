@@ -54,17 +54,26 @@ function rng(seed: number) {
 export function Ants({
   stars,
   stargazers = null,
+  budget = 1,
+  moving = false,
 }: {
   stars: number;
   stargazers?: Stargazer[] | null;
+  budget?: number;
+  moving?: boolean;
 }) {
   const { scene: antScene, animations } = useGLTF(ANT);
   // Villager counts come from the quality tier: skinned clones + their
   // AnimationMixers are the heaviest CPU loop in the scene.
   const profile = useQualityProfile();
-  const perHouse = profile.antsPerHouse;
-  const trunkAnts = profile.antsTrunk;
-  const mixerStride = Math.max(1, profile.antMixerStride);
+  const agentBudget = THREE.MathUtils.clamp(budget, 0.45, 1);
+  const perHouse = Math.max(1, Math.round(profile.antsPerHouse * agentBudget));
+  const trunkAnts = Math.max(4, Math.round(profile.antsTrunk * agentBudget));
+  const mixerStride = Math.max(
+    profile.antMixerStride,
+    Math.ceil(1 / agentBudget),
+    moving ? 2 : 1,
+  );
   const anchors = useMemo(() => sampleBranchAnchors(null, MAX_HOUSES), []);
   const active = Math.min(anchors.length, Math.max(0, Math.floor(stars)));
 

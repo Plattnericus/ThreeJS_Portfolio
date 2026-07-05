@@ -19,9 +19,11 @@ const WING_COLOR = "#f4f3ec";
 export function Dove({
   interactive = true,
   onFind,
+  moving = false,
 }: {
   interactive?: boolean;
   onFind?: () => void;
+  moving?: boolean;
 }) {
   const { scene, animations } = useGLTF(BIRD);
   const wrapper = useRef<THREE.Group>(null);
@@ -82,24 +84,28 @@ export function Dove({
   );
   const rot = useRef(new THREE.Euler(0, 0, 0, "YXZ"));
   const prev = useRef(new THREE.Vector3());
+  const pos = useRef(new THREE.Vector3());
+  const vel = useRef(new THREE.Vector3());
+  const mixerFrame = useRef(0);
+  const mixerAccum = useRef(0);
 
   useFrame((state, dt) => {
     const t = state.clock.elapsedTime;
     const g = wrapper.current;
     if (!g) return;
     const a = t * path.speed + path.phase;
-    const pos = new THREE.Vector3(
+    const p = pos.current.set(
       Math.cos(a) * path.radius,
       path.height + Math.sin(t * 0.45 + path.bob) * 1.6,
       Math.sin(a) * path.radius,
     );
 
-    const vel = pos.clone().sub(prev.current);
-    prev.current.copy(pos);
-    const sp = vel.length();
+    const v = vel.current.copy(p).sub(prev.current);
+    prev.current.copy(p);
+    const sp = v.length();
     if (sp > 1e-4) {
-      const yaw = Math.atan2(vel.x, vel.z) + MODEL_YAW;
-      const pitch = -Math.asin(THREE.MathUtils.clamp(vel.y / sp, -1, 1)) * 0.6;
+      const yaw = Math.atan2(v.x, v.z) + MODEL_YAW;
+      const pitch = -Math.asin(THREE.MathUtils.clamp(v.y / sp, -1, 1)) * 0.6;
       let dyaw = yaw - rot.current.y;
       while (dyaw > Math.PI) dyaw -= Math.PI * 2;
       while (dyaw < -Math.PI) dyaw += Math.PI * 2;
@@ -113,7 +119,7 @@ export function Dove({
     const flap = flapAngle(t, path.phase, true, hz);
     wingR.rotation.z = flap;
     wingL.rotation.z = -flap;
-    g.position.set(pos.x, pos.y + Math.sin(t * hz + path.phase) * 0.05, pos.z);
+    g.position.set(p.x, p.y + Math.sin(t * hz + path.phase) * 0.05, p.z);
     g.rotation.copy(rot.current);
 
     const target = hovered ? DOVE_SCALE * 1.16 : DOVE_SCALE;
@@ -121,7 +127,13 @@ export function Dove({
       const s = inner.current.scale.x + (target - inner.current.scale.x) * 0.12;
       inner.current.scale.setScalar(s);
     }
-    mixer.update(dt);
+    mixerFrame.current += 1;
+    mixerAccum.current += dt;
+    const mixerStride = moving ? 2 : 1;
+    if (mixerFrame.current % mixerStride === 0) {
+      mixer.update(mixerAccum.current);
+      mixerAccum.current = 0;
+    }
   });
 
   const enter = (e: ThreeEvent<PointerEvent>) => {

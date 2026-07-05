@@ -343,6 +343,7 @@ function Plateau({
   cloudCover = 0,
   grassBlades,
   grassTufts,
+  budget = 1,
 }: {
   wind: number;
   gust: number;
@@ -352,9 +353,11 @@ function Plateau({
   cloudCover?: number;
   grassBlades: number;
   grassTufts: number;
+  budget?: number;
 }) {
   const { scene } = useGLTF("/models/island.glb");
   const profile = useQualityProfile();
+  const ambientBudget = THREE.MathUtils.clamp(budget, 0.45, 1);
   const surface = useMemo(
     () => sampleIslandSurface(scene, ISLAND_SCALE),
     [scene],
@@ -366,12 +369,21 @@ function Plateau({
       <Flora radius={PLATEAU_R + 2} surface={surface} />
       <Fireflies
         night={night}
-        count={profile.fireflies}
+        count={Math.max(8, Math.round(profile.fireflies * ambientBudget))}
         baseY={PLATEAU_Y - 0.5}
         radius={PLATEAU_R + 1}
         height={11}
       />
-      <FallingLeaves wind={wind} gust={gust} windVec={windVec} season={season} surface={surface} treeY={TREE_Y} radius={PLATEAU_R + 2} />
+      <FallingLeaves
+        wind={wind}
+        gust={gust}
+        windVec={windVec}
+        season={season}
+        surface={surface}
+        treeY={TREE_Y}
+        radius={PLATEAU_R + 2}
+        budget={ambientBudget}
+      />
     </>
   );
 }
@@ -403,7 +415,10 @@ export default function Experience({
   // Visible, DEPTH-TESTED sun disc: the z-buffer occludes it behind the tree,
   // so bloom can only glow where the sun is genuinely visible (real physics —
   // light through canopy gaps, never through wood).
-  const sunFar = new THREE.Vector3(...params.sunPos).normalize().multiplyScalar(120);
+  const sunFar = useMemo<[number, number, number]>(() => {
+    const p = new THREE.Vector3(...params.sunPos).normalize().multiplyScalar(120);
+    return [p.x, p.y, p.z];
+  }, [params.sunPos]);
   // Quality presets keep motion responsive without dropping the scene into a visibly pixelated state.
   const [dpr, setDpr] = useState(quality.idleDpr);
   const [cloudQuality, setCloudQuality] = useState(quality.idleCloudQuality);
@@ -454,6 +469,10 @@ export default function Experience({
     trunkTargetLocal.z * TREE_BOOST,
   ];
   const camMax = THREE.MathUtils.clamp(worldH * 1.6 + 26, 40, 340);
+  const ambientBudget = THREE.MathUtils.clamp(perfBudget, 0.45, 1);
+  const birdCount = Math.max(2, Math.round(4 * ambientBudget));
+  const bloomEnabled = quality.bloom && (!performanceMoving || quality.movingBloom);
+  const postprocessingSamples = performanceMoving ? 0 : quality.postprocessingSamples;
 
   return (
     <Canvas
@@ -520,7 +539,7 @@ export default function Experience({
         {/* Sun disc: rendered physically in the dome AND as a mesh here so the
             god-rays pass has a real occludable light source (the BSL look —
             golden shafts through the canopy at a low sun). */}
-        <mesh position={sunFar.toArray()} visible={params.sunElevationDeg > -0.8}>
+        <mesh position={sunFar} visible={params.sunElevationDeg > -0.8}>
           <sphereGeometry args={[4.4, 20, 20]} />
           {/* Opaque: the god-rays depth mask needs a solid occludable source;
               softness comes from the dome shader + bloom. */}
@@ -533,7 +552,7 @@ export default function Experience({
           quality={effectiveCloudQuality}
           moving={performanceMoving}
         />
-        <Dove interactive={!fly} onFind={onFindDove} />
+        <Dove interactive={!fly} onFind={onFindDove} moving={performanceMoving} />
 
         <Float speed={1.1} rotationIntensity={0.1} floatIntensity={0.5}>
           <Island snow={params.snow} scale={ISLAND_SCALE} cloudCover={params.cloud} windVec={params.windVec} />
@@ -546,6 +565,7 @@ export default function Experience({
             cloudCover={params.cloud}
             grassBlades={quality.grassBlades}
             grassTufts={quality.grassTufts}
+            budget={ambientBudget}
           />
           <group position={[0, TREE_Y, 0]} scale={TREE_BOOST}>
             <Tree
@@ -574,8 +594,13 @@ export default function Experience({
                 onSelect={onSelectHouse}
               />
               <Bridges stars={stars} night={night} stargazers={stargazers} />
-              <Ants stars={stars} stargazers={stargazers} />
-              <Birds count={4} stars={stars} />
+              <Ants
+                stars={stars}
+                stargazers={stargazers}
+                budget={ambientBudget}
+                moving={performanceMoving}
+              />
+              <Birds count={birdCount} stars={stars} moving={performanceMoving} />
             </Tree>
           </group>
         </Float>
@@ -596,9 +621,10 @@ export default function Experience({
         {/* BSL-style finish (high/extreme). NO screen-space god-rays pass: its
             depth mask kept compositing the sun OVER the canopy. Instead the
             depth-tested sun disc + wide bloom produce the same shafts-through-
-            gaps look with guaranteed occlusion. multisampling=4 keeps MSAA. */}
-        {quality.bloom && (
-          <EffectComposer multisampling={4}>
+            gaps look with guaranteed occlusion. MSAA follows the quality tier
+            and drops while the camera is moving. */}
+        {bloomEnabled && (
+          <EffectComposer multisampling={postprocessingSamples}>
             {/* Golden hour drives the finish: as the sun crosses the horizon
                 the bloom widens and its threshold drops so light spills
                 through the canopy gaps (the BSL shafts), and the grade warms. */}

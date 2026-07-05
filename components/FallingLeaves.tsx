@@ -19,6 +19,7 @@ type LeafState = {
   visible: boolean;
   landedAt: number;
   phase: number;
+  dirty: boolean;
 };
 
 function mulberry(seed: number) {
@@ -58,6 +59,7 @@ export function FallingLeaves({
   surface,
   treeY,
   radius = 10.5,
+  budget = 1,
 }: {
   wind: number;
   gust?: number;
@@ -66,14 +68,19 @@ export function FallingLeaves({
   surface?: SurfaceProfile;
   treeY: number;
   radius?: number;
+  budget?: number;
 }) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
-  const MAX_LEAVES = useQualityProfile().fallingLeaves;
+  const profile = useQualityProfile();
+  const maxLeaves = Math.max(
+    12,
+    Math.round(profile.fallingLeaves * THREE.MathUtils.clamp(budget, 0.45, 1)),
+  );
   const rngRef = useRef(mulberry(8042));
   const spawnAcc = useRef(0);
   const states = useMemo<{ current: LeafState[] }>(
     () => ({
-      current: Array.from({ length: MAX_LEAVES }, (_, i) => ({
+      current: Array.from({ length: maxLeaves }, (_, i) => ({
         pos: new THREE.Vector3(0, -200, 0),
         vel: new THREE.Vector3(),
         rot: new THREE.Euler(),
@@ -83,9 +90,10 @@ export function FallingLeaves({
         visible: false,
         landedAt: -1000 - i,
         phase: i * 1.37,
+        dirty: true,
       })),
     }),
-    [MAX_LEAVES],
+    [maxLeaves],
   );
 
   const geometry = useMemo(makeLeafGeometry, []);
@@ -103,8 +111,8 @@ export function FallingLeaves({
 
   const colors = useMemo(() => {
     const rng = mulberry(3301);
-    return Array.from({ length: MAX_LEAVES }, () => leafColor(season, rng));
-  }, [season, MAX_LEAVES]);
+    return Array.from({ length: maxLeaves }, () => leafColor(season, rng));
+  }, [season, maxLeaves]);
 
   useEffect(() => {
     const mesh = meshRef.current;
@@ -112,6 +120,17 @@ export function FallingLeaves({
     colors.forEach((c, i) => mesh.setColorAt(i, c));
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }, [colors]);
+
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    TMP.position.set(0, -200, 0);
+    TMP.rotation.set(0, 0, 0);
+    TMP.scale.setScalar(0);
+    TMP.updateMatrix();
+    for (let i = 0; i < maxLeaves; i++) mesh.setMatrixAt(i, TMP.matrix);
+    mesh.instanceMatrix.needsUpdate = true;
+  }, [maxLeaves]);
 
   const groundY = (p: THREE.Vector3) => {
     const limit = surface ? surface.edgeR * 0.96 : radius;
@@ -158,6 +177,7 @@ export function FallingLeaves({
     l.visible = true;
     l.landedAt = now;
     l.phase = rng() * Math.PI * 2;
+    l.dirty = true;
   };
 
   useFrame((state, dt) => {
@@ -179,12 +199,12 @@ export function FallingLeaves({
       spawn(t);
     }
 
-    for (let i = 0; i < MAX_LEAVES; i++) {
+    let changed = false;
+    for (let i = 0; i < maxLeaves; i++) {
       const l = states.current[i];
-      if (!l.visible) {
-        TMP.position.set(0, -200, 0);
-        TMP.scale.setScalar(0);
-      } else if (l.landed) {
+      if (!l.visible) continue;
+      if (l.landed) {
+        if (!l.dirty) continue;
         TMP.position.copy(l.pos);
         TMP.rotation.set(-Math.PI / 2, l.rot.y, l.rot.z);
         TMP.scale.setScalar(l.scale);
@@ -210,6 +230,7 @@ export function FallingLeaves({
           l.landedAt = t;
           l.rot.x = -Math.PI / 2;
           l.spin.set(0, 0, 0);
+          l.dirty = true;
         }
         TMP.position.copy(l.pos);
         TMP.rotation.copy(l.rot);
@@ -217,15 +238,17 @@ export function FallingLeaves({
       }
       TMP.updateMatrix();
       mesh.setMatrixAt(i, TMP.matrix);
+      l.dirty = false;
+      changed = true;
     }
-    mesh.instanceMatrix.needsUpdate = true;
+    if (changed) mesh.instanceMatrix.needsUpdate = true;
   });
 
   return (
     <instancedMesh
-      key={MAX_LEAVES}
+      key={maxLeaves}
       ref={meshRef}
-      args={[geometry, material, MAX_LEAVES]}
+      args={[geometry, material, maxLeaves]}
       frustumCulled={false}
     />
   );

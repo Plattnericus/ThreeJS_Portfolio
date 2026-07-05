@@ -28,6 +28,13 @@ export function SceneRig({
   const hemi = useRef<THREE.HemisphereLight>(null);
   const dir = useRef<THREE.DirectionalLight>(null);
   const lastShadowUpdate = useRef(-1);
+  const target = useRef({
+    bg: new THREE.Color(),
+    fog: new THREE.Color(),
+    sun: new THREE.Color(),
+    pos: new THREE.Vector3(),
+    sky: new THREE.Color(),
+  });
 
   const cur = useRef({
     bg: new THREE.Color(params.skyColor),
@@ -52,12 +59,13 @@ export function SceneRig({
   useFrame((state, dt) => {
     const k = Math.min(1, dt * 1.4);
     const c = cur.current;
+    const next = target.current;
 
-    c.bg.lerp(new THREE.Color(params.skyColor), k);
+    c.bg.lerp(next.bg.set(params.skyColor), k);
     (scene.background as THREE.Color).copy(c.bg);
 
     const fog = scene.fog as THREE.Fog;
-    c.fog.lerp(new THREE.Color(params.fogColor), k);
+    c.fog.lerp(next.fog.set(params.fogColor), k);
     fog.color.copy(c.fog);
     c.fogNear += (params.fogNear * fogScale - c.fogNear) * k;
     c.fogFar += (params.fogFar * fogScale - c.fogFar) * k;
@@ -67,12 +75,12 @@ export function SceneRig({
     if (dir.current) {
       c.sunI += (params.sunIntensity - c.sunI) * k;
       dir.current.intensity = c.sunI;
-      c.sun.lerp(new THREE.Color(params.sunColor), k);
+      c.sun.lerp(next.sun.set(params.sunColor), k);
       dir.current.color.copy(c.sun);
       // sunPos follows the real sun and dips below the horizon at night; the
       // key light must never shine from underneath, so clamp its height.
       c.pos.lerp(
-        new THREE.Vector3(params.sunPos[0], Math.max(params.sunPos[1], 2.5), params.sunPos[2]),
+        next.pos.set(params.sunPos[0], Math.max(params.sunPos[1], 2.5), params.sunPos[2]),
         k,
       );
       dir.current.position.copy(c.pos);
@@ -80,7 +88,7 @@ export function SceneRig({
     if (hemi.current) {
       c.hemiI += (params.ambient - c.hemiI) * k;
       hemi.current.intensity = c.hemiI;
-      c.sky.lerp(new THREE.Color(params.skyColor), k);
+      c.sky.lerp(next.sky.set(params.skyColor), k);
       hemi.current.color.copy(c.sky);
     }
 

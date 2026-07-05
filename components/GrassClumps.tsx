@@ -169,7 +169,6 @@ export function GrassClumps({
           args={[p.geo, p.mat, count]}
           castShadow={false}
           receiveShadow
-          frustumCulled={false}
         />
       ))}
     </group>

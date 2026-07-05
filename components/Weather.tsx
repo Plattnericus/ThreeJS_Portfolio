@@ -26,6 +26,7 @@ function Snow({
   max: number;
 }) {
   const ref = useRef<THREE.Points>(null);
+  const material = useRef<THREE.ShaderMaterial>(null);
   const count = Math.max(1, Math.floor(max * intensity));
 
   const { positions, speeds } = useMemo(() => {
@@ -40,43 +41,67 @@ function Snow({
     return { positions, speeds };
   }, [max]);
 
-  useFrame((state, dt) => {
+  useFrame((state) => {
     const pts = ref.current;
-    if (!pts) return;
-    const arr = pts.geometry.attributes.position.array as Float32Array;
-    const t = state.clock.elapsedTime;
-    const wx = windVec[0];
-    const wz = windVec[1];
-    const sx = -wz;
-    const sz = wx;
-    const flow = wind + gust * 0.28;
-    for (let i = 0; i < count; i++) {
-      const yi = i * 3 + 1;
-      arr[yi] -= speeds[i] * dt;
-      const swirl = Math.sin(t + i) * dt * 0.35;
-      arr[i * 3] += wx * flow * dt * 1.2 + sx * swirl;
-      arr[i * 3 + 2] += wz * flow * dt * 1.2 + sz * swirl;
-      if (arr[yi] < -10) {
-        arr[yi] = TOP;
-        arr[i * 3] = (Math.random() - 0.5) * AREA * 2;
-        arr[i * 3 + 2] = (Math.random() - 0.5) * AREA * 2;
-      } else {
-        if (arr[i * 3] > AREA) arr[i * 3] = -AREA;
-        else if (arr[i * 3] < -AREA) arr[i * 3] = AREA;
-        if (arr[i * 3 + 2] > AREA) arr[i * 3 + 2] = -AREA;
-        else if (arr[i * 3 + 2] < -AREA) arr[i * 3 + 2] = AREA;
-      }
-    }
-    pts.geometry.attributes.position.needsUpdate = true;
+    const mat = material.current;
+    if (!pts || !mat) return;
     pts.geometry.setDrawRange(0, count);
+    mat.uniforms.uTime.value = state.clock.elapsedTime;
+    mat.uniforms.uFlow.value = wind + gust * 0.28;
+    mat.uniforms.uWindDir.value.set(windVec[0], windVec[1]).normalize();
+    mat.uniforms.uOpacity.value = 0.95;
   });
 
   return (
-    <points ref={ref} frustumCulled={false}>
+    <points ref={ref}>
       <bufferGeometry key={max}>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        <bufferAttribute attach="attributes-aSpeed" args={[speeds, 1]} />
       </bufferGeometry>
-      <pointsMaterial size={0.32} color="#ffffff" transparent opacity={0.95} depthWrite={false} sizeAttenuation />
+      <shaderMaterial
+        ref={material}
+        transparent
+        depthWrite={false}
+        uniforms={{
+          uTime: { value: 0 },
+          uFlow: { value: 0 },
+          uWindDir: { value: new THREE.Vector2(windVec[0], windVec[1]) },
+          uOpacity: { value: 0.95 },
+        }}
+        vertexShader={/* glsl */ `
+          uniform float uTime;
+          uniform float uFlow;
+          uniform vec2 uWindDir;
+          attribute float aSpeed;
+          varying float vAlpha;
+          const float AREA = ${AREA.toFixed(1)};
+          const float TOP = ${TOP.toFixed(1)};
+          void main() {
+            vec2 wind = normalize(uWindDir);
+            vec2 side = vec2(-wind.y, wind.x);
+            float span = TOP + 10.0;
+            float y = mod(position.y + 10.0 - uTime * aSpeed, span) - 10.0;
+            float swirl = sin(uTime + position.x * 0.37 + position.z * 0.23) * 0.35;
+            vec2 xz = position.xz + wind * uFlow * uTime * 1.2 + side * swirl;
+            xz = mod(xz + AREA, AREA * 2.0) - AREA;
+            vec4 mv = modelViewMatrix * vec4(xz.x, y, xz.y, 1.0);
+            gl_PointSize = 0.32 * (110.0 / -mv.z);
+            gl_Position = projectionMatrix * mv;
+            vAlpha = smoothstep(-10.0, -6.0, y) * smoothstep(TOP, TOP - 6.0, y);
+          }
+        `}
+        fragmentShader={/* glsl */ `
+          uniform float uOpacity;
+          varying float vAlpha;
+          void main() {
+            vec2 uv = gl_PointCoord - 0.5;
+            float d = length(uv);
+            if (d > 0.5) discard;
+            float soft = smoothstep(0.5, 0.08, d);
+            gl_FragColor = vec4(vec3(1.0), soft * vAlpha * uOpacity);
+          }
+        `}
+      />
     </points>
   );
 }
@@ -97,71 +122,98 @@ function Rain({
   max: number;
 }) {
   const ref = useRef<THREE.LineSegments>(null);
+  const material = useRef<THREE.ShaderMaterial>(null);
   const count = Math.max(1, Math.floor(max * Math.max(0.35, intensity)));
   const len = 1.1 + intensity * 1.6; // streak length
   const slant = THREE.MathUtils.clamp((wind + gust * 0.32) * 0.5, 0, 2.4);
 
-  const { positions, speeds } = useMemo(() => {
+  const { positions, speeds, tails } = useMemo(() => {
     const positions = new Float32Array(max * 6);
-    const speeds = new Float32Array(max);
+    const speeds = new Float32Array(max * 2);
+    const tails = new Float32Array(max * 2);
     for (let i = 0; i < max; i++) {
       const x = (Math.random() - 0.5) * AREA * 2;
       const y = Math.random() * TOP;
       const z = (Math.random() - 0.5) * AREA * 2;
+      const speed = 26 * (0.75 + Math.random() * 0.5);
       positions[i * 6] = x;
       positions[i * 6 + 1] = y;
       positions[i * 6 + 2] = z;
       positions[i * 6 + 3] = x;
-      positions[i * 6 + 4] = y - 1;
+      positions[i * 6 + 4] = y;
       positions[i * 6 + 5] = z;
-      speeds[i] = 26 * (0.75 + Math.random() * 0.5);
+      speeds[i * 2] = speed;
+      speeds[i * 2 + 1] = speed;
+      tails[i * 2] = 0;
+      tails[i * 2 + 1] = 1;
     }
-    return { positions, speeds };
+    return { positions, speeds, tails };
   }, [max]);
 
-  useFrame((_, dt) => {
+  useFrame((state) => {
     const seg = ref.current;
-    if (!seg) return;
-    const arr = seg.geometry.attributes.position.array as Float32Array;
-    const flow = wind + gust * 0.32;
-    const dx = windVec[0] * slant * len * 0.4;
-    const dz = windVec[1] * slant * len * 0.4;
-    for (let i = 0; i < count; i++) {
-      const o = i * 6;
-      let x = arr[o] + windVec[0] * flow * dt * 3.2;
-      let y = arr[o + 1] - speeds[i] * dt;
-      let z = arr[o + 2] + windVec[1] * flow * dt * 3.2;
-      if (y < -8) {
-        y = TOP + Math.random() * 6;
-        x = (Math.random() - 0.5) * AREA * 2;
-        z = (Math.random() - 0.5) * AREA * 2;
-      } else {
-        if (x > AREA) x = -AREA;
-        else if (x < -AREA) x = AREA;
-        if (z > AREA) z = -AREA;
-        else if (z < -AREA) z = AREA;
-      }
-      arr[o] = x;
-      arr[o + 1] = y;
-      arr[o + 2] = z;
-      arr[o + 3] = x - dx;
-      arr[o + 4] = y - len;
-      arr[o + 5] = z - dz;
-    }
-    seg.geometry.attributes.position.needsUpdate = true;
+    const mat = material.current;
+    if (!seg || !mat) return;
     seg.geometry.setDrawRange(0, count * 2);
+    mat.uniforms.uTime.value = state.clock.elapsedTime;
+    mat.uniforms.uFlow.value = wind + gust * 0.32;
+    mat.uniforms.uWindDir.value.set(windVec[0], windVec[1]).normalize();
+    mat.uniforms.uLength.value = len;
+    mat.uniforms.uSlant.value = slant;
+    mat.uniforms.uOpacity.value = 0.34 + intensity * 0.3;
   });
 
   return (
-    <lineSegments ref={ref} frustumCulled={false}>
+    <lineSegments ref={ref}>
       <bufferGeometry key={max}>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        <bufferAttribute attach="attributes-aSpeed" args={[speeds, 1]} />
+        <bufferAttribute attach="attributes-aTail" args={[tails, 1]} />
       </bufferGeometry>
-      <lineBasicMaterial
-        color="#9fc2e8"
+      <shaderMaterial
+        ref={material}
         transparent
-        opacity={0.34 + intensity * 0.3}
         depthWrite={false}
+        uniforms={{
+          uTime: { value: 0 },
+          uFlow: { value: 0 },
+          uWindDir: { value: new THREE.Vector2(windVec[0], windVec[1]) },
+          uLength: { value: len },
+          uSlant: { value: slant },
+          uOpacity: { value: 0.34 + intensity * 0.3 },
+          uColor: { value: new THREE.Color("#9fc2e8") },
+        }}
+        vertexShader={/* glsl */ `
+          uniform float uTime;
+          uniform float uFlow;
+          uniform vec2 uWindDir;
+          uniform float uLength;
+          uniform float uSlant;
+          attribute float aSpeed;
+          attribute float aTail;
+          varying float vAlpha;
+          const float AREA = ${AREA.toFixed(1)};
+          const float TOP = ${TOP.toFixed(1)};
+          void main() {
+            vec2 wind = normalize(uWindDir);
+            float span = TOP + 8.0;
+            float y = mod(position.y + 8.0 - uTime * aSpeed, span) - 8.0;
+            vec2 xz = position.xz + wind * uFlow * uTime * 3.2;
+            xz = mod(xz + AREA, AREA * 2.0) - AREA;
+            vec2 slant = wind * uSlant * uLength * 0.4;
+            vec3 p = vec3(xz.x, y, xz.y) - vec3(slant.x, uLength, slant.y) * aTail;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+            vAlpha = smoothstep(-8.0, -4.0, y) * smoothstep(TOP, TOP - 7.0, y);
+          }
+        `}
+        fragmentShader={/* glsl */ `
+          uniform float uOpacity;
+          uniform vec3 uColor;
+          varying float vAlpha;
+          void main() {
+            gl_FragColor = vec4(uColor, uOpacity * vAlpha);
+          }
+        `}
       />
     </lineSegments>
   );
