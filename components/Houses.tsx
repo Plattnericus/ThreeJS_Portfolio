@@ -130,6 +130,29 @@ function makePlatform(deckR: number): THREE.Group {
   return g;
 }
 
+// The village pack ships every building on a MeshPhysicalMaterial (clearcoat +
+// transmission machinery runs per-fragment even though these flat low-poly props
+// use none of it). Rebuild as a plain MeshStandardMaterial — visually identical
+// for these matte props, but a much cheaper fragment shader across every house.
+function toStandard(src: THREE.Material): THREE.MeshStandardMaterial {
+  const p = src as THREE.MeshStandardMaterial; // physical extends standard, so these all exist
+  const m = new THREE.MeshStandardMaterial({
+    color: p.color?.clone(),
+    map: p.map ?? null,
+    normalMap: p.normalMap ?? null,
+    roughness: p.roughness ?? 0.9,
+    metalness: p.metalness ?? 0,
+    emissive: p.emissive?.clone() ?? new THREE.Color(0x000000),
+    emissiveMap: p.emissiveMap ?? null,
+    emissiveIntensity: p.emissiveIntensity ?? 1,
+    vertexColors: p.vertexColors ?? false,
+    transparent: p.transparent ?? false,
+    opacity: p.opacity ?? 1,
+    side: p.side ?? THREE.FrontSide,
+  });
+  return m;
+}
+
 type BuildFn = (tier: Tier) => THREE.Group | null;
 
 function useBuildingFactory(): BuildFn {
@@ -143,7 +166,7 @@ function useBuildingFactory(): BuildFn {
     return (tier: Tier) => {
       const src = geos.get(TIER_BUILDING[tier]);
       if (!src) return null;
-      const mesh = new THREE.Mesh(src.geo.clone(), (src.mat as THREE.Material).clone());
+      const mesh = new THREE.Mesh(src.geo.clone(), toStandard(src.mat));
       mesh.castShadow = true;
       mesh.rotation.x = -Math.PI / 2; // Z-up -> Y-up
       mesh.updateMatrixWorld(true);

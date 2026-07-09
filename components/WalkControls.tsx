@@ -2,31 +2,44 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
-import { useGLTF } from "@react-three/drei";
+import { CapsuleCollider, RigidBody, useRapier, type RapierRigidBody } from "@react-three/rapier";
 import * as THREE from "three";
-import { sampleIslandSurface } from "@/lib/surface";
 import { bonsaiNodes } from "@/lib/bonsai";
-import { deckRadius } from "@/lib/rarity";
 import type { Stargazer } from "@/lib/stargazers";
 
-// First-person WALK explorer: pointer-lock mouse-look + WASD, gravity + jump,
-// cheap ground collision against the island's radial height profile AND the house
-// decks (so you can stand on them). Near the tree you CLIMB by looking up/down +
-// W (reach the houses). You can't fall off the island (soft wall at the edge).
-// Entering walk plays a short cinematic that eases in toward the founder house.
+// First-person WALK explorer backed by REAL rigidbody physics
+// (@react-three/rapier), using rapier's own KinematicCharacterController —
+// NOT a hand-rolled velocity/raycast hack. The controller's `enableAutostep`
+// climbs stair-riser-height obstacles automatically (so the spiral staircase
+// in Bridges.tsx is climbed via plain WASD, no special "climb mode"),
+// `enableSnapToGround` keeps the character glued to stepped/sloped ground
+// instead of repeatedly losing and regaining contact (the previous
+// raycast-grounded-check + manual setTranslation steering was the source of
+// the jitter/"things moving" bug — it fought the real collider every frame).
+// The capsule is a kinematic body: we compute the desired move, ask the
+// controller to resolve it against the real trimesh colliders (slide along
+// walls, stop at steps too tall, etc.), then commit the RESULT. Mouse-look
+// only ever rotates the camera — the capsule itself never rotates.
 
 const EULER_ORDER = "YXZ";
 const PITCH_LIMIT = Math.PI / 2 - 0.08;
 const ISLAND_SCALE = 0.8; // must match Experience.ISLAND_SCALE
 const TREE_Y = 7.35 * ISLAND_SCALE; // must match Experience.TREE_Y
 const TREE_BOOST = 1.15; // must match Experience.TREE_BOOST
-const EYE = 2.4;
+const CAPSULE_R = 0.3;
+const CAPSULE_HALF_H = 0.575; // total capsule height = 2*(half+R) ≈ 1.75, human-scale
+const EYE_OFFSET = CAPSULE_HALF_H + CAPSULE_R - 0.15; // camera near the top of the capsule
+const JUMP_VEL = 6.5;
 const GRAVITY = 26;
-const JUMP = 9;
-const STEP = 0.75; // max height you can step up onto a deck
-const CLIMB_R = 9.5; // horizontal radius around the trunk where you can climb
-const CLIMB_SPEED = 5.2;
 const INTRO_SECONDS = 3.4;
+const RESPAWN_Y = -60; // fell into the void (walked off an edge) — real physics allows this now
+// Spawn stays this far from the trunk at most — comfortably inside the island
+// floor collider (radius 12.5 in Experience.tsx) so gravity never drops the
+// player off the edge on spawn. Near the trunk = near the ladder to climb up.
+const SPAWN_RADIUS = 5;
+const FLY_SPEED = 10; // horizontal speed while flying — a bit faster than walking, Minecraft-style
+const FLY_VERTICAL_SPEED = 7.5; // Space = up, Shift = down while flying
+const DOUBLE_TAP_MS = 320; // window for the double-Space fly toggle
 
 const MOVE_KEYS = new Set([
   "KeyW", "KeyA", "KeyS", "KeyD",
@@ -40,39 +53,53 @@ function isTypingTarget(target: EventTarget | null) {
   return tag === "input" || tag === "textarea" || target.isContentEditable;
 }
 
-type Deck = { x: number; z: number; y: number; r: number };
+type Deck = { x: number; z: number; y: number };
 
 export function WalkControls({
   speed = 6,
   lookSpeed = 0.0019,
   stars = 0,
   stargazers = null,
+  onIntroChange,
 }: {
   speed?: number;
   lookSpeed?: number;
   stars?: number;
   stargazers?: Stargazer[] | null;
+  onIntroChange?: (introing: boolean) => void;
 }) {
   const { camera, gl } = useThree();
-  const { scene } = useGLTF("/models/island.glb");
-  const surface = useMemo(() => sampleIslandSurface(scene, ISLAND_SCALE), [scene]);
+  const { world } = useRapier();
+  const bodyRef = useRef<RapierRigidBody>(null);
+  const controllerRef = useRef<ReturnType<typeof world.createCharacterController> | null>(null);
 
-  // House decks in WORLD space (same transform as Experience's Tree group).
-  const decks = useMemo<Deck[]>(() => {
-    const count = Math.max(0, Math.floor(stars));
-    return bonsaiNodes(count).map((n, i) => ({
+  useEffect(() => {
+    const controller = world.createCharacterController(0.03);
+    // Max step height comfortably clears a ladder rung (RUNG_PITCH in
+    // Bridges.tsx) — walking straight into one steps you up automatically.
+    controller.enableAutostep(0.42, 0.2, true);
+    controller.enableSnapToGround(0.35);
+    controller.setSlideEnabled(true);
+    controller.setMaxSlopeClimbAngle((80 * Math.PI) / 180);
+    controller.setMinSlopeSlideAngle((55 * Math.PI) / 180);
+    controllerRef.current = controller;
+    return () => {
+      world.removeCharacterController(controller);
+      controllerRef.current = null;
+    };
+  }, [world]);
+
+  // Founder's house position (world space, same transform as Experience's
+  // Tree group) — used only to aim the cinematic intro / spawn point.
+  const founderDeck = useMemo<Deck | null>(() => {
+    if (Math.max(0, Math.floor(stars)) < 1) return null;
+    const n = bonsaiNodes(1)[0];
+    return {
       x: n.tip.x * TREE_BOOST,
       z: n.tip.z * TREE_BOOST,
       y: TREE_Y + (n.tip.y + 0.35) * TREE_BOOST,
-      r: deckRadius(i, stargazers) * TREE_BOOST,
-    }));
+    };
   }, [stars, stargazers]);
-
-  const clampR = useMemo(() => {
-    let m = surface.edgeR + 0.5;
-    for (const d of decks) m = Math.max(m, Math.hypot(d.x, d.z) + d.r);
-    return Math.max(m, 9.5);
-  }, [decks, surface]);
 
   const keys = useRef(new Set<string>());
   const dragging = useRef(false);
@@ -82,53 +109,94 @@ export function WalkControls({
   const smoothYaw = useRef(0);
   const smoothPitch = useRef(0);
   const lookDelta = useRef({ x: 0, y: 0 });
-  const vy = useRef(0);
   const euler = useRef(new THREE.Euler(0, 0, 0, EULER_ORDER));
   const yawEuler = useRef(new THREE.Euler(0, 0, 0, EULER_ORDER));
   const quat = useRef(new THREE.Quaternion());
   const forward = useRef(new THREE.Vector3());
   const right = useRef(new THREE.Vector3());
   const move = useRef(new THREE.Vector3());
+  const curSpeed = useRef(0);
+  const moveDir = useRef(new THREE.Vector3());
+  const vy = useRef(0);
+  const grounded = useRef(true);
+  const desired = useRef(new THREE.Vector3());
+  // Minecraft-style creative flight: double-tap Space toggles it, gravity is
+  // suspended while active, Space/Shift move straight up/down.
+  const flying = useRef(false);
+  const lastSpaceTapAt = useRef(0);
 
-  // Cinematic intro toward the founder (first stargazer) house.
+  // Cinematic intro toward the founder (first stargazer) house. Purely a
+  // camera lerp/arc — the physics body teleports to the spawn point and only
+  // starts driving the camera once the intro hands off.
   const introT = useRef(0);
   const introing = useRef(true);
   const introStart = useRef(new THREE.Vector3());
   const introTarget = useRef(new THREE.Vector3());
+  const introControl = useRef(new THREE.Vector3());
   const spawnPos = useRef(new THREE.Vector3());
+  const introA = useRef(new THREE.Vector3());
+  const introB = useRef(new THREE.Vector3());
+  const onIntroChangeRef = useRef(onIntroChange);
+  onIntroChangeRef.current = onIntroChange;
 
-  const groundTopAt = (x: number, z: number, feetY: number) => {
-    const r = Math.hypot(x, z);
-    let top = r <= surface.edgeR + 0.5 ? surface.heightAt(Math.min(r, surface.edgeR)) : -Infinity;
-    for (const d of decks) {
-      if (Math.hypot(x - d.x, z - d.z) <= d.r && d.y <= feetY + STEP) top = Math.max(top, d.y);
-    }
-    return top;
+  // Whenever the intro hands off — whether it finished naturally OR got
+  // cancelled early by a keypress — the look state MUST be resynced from
+  // wherever the camera actually ended up. Skipping this (previously only
+  // ran on natural completion) left yaw/pitch at their stale mount-time
+  // value, so an early-cancelled intro snapped the camera to a wrong facing
+  // the instant normal control took over.
+  const syncLookFromCamera = () => {
+    euler.current.setFromQuaternion(camera.quaternion, EULER_ORDER);
+    yaw.current = smoothYaw.current = euler.current.y;
+    pitch.current = smoothPitch.current = euler.current.x;
+    curSpeed.current = 0;
   };
 
   const setup = () => {
-    const dev = decks[0];
+    const dev = founderDeck;
     if (dev) {
-      // stand a little outside the founder house, on the ground, looking up at it
       const dr = Math.hypot(dev.x, dev.z) || 1;
-      const k = Math.min((dr + 2.4) / dr, (surface.edgeR - 0.5) / dr);
-      const sx = dev.x * k;
-      const sz = dev.z * k;
-      spawnPos.current.set(sx, surface.heightAt(Math.min(Math.hypot(sx, sz), surface.edgeR)) + EYE, sz);
-      introTarget.current.set(dev.x, dev.y + 0.6, dev.z);
-      // establishing shot: high, pulled further out beyond the house
-      introStart.current.set(dev.x * (k + 1.15), dev.y + 7.5, dev.z * (k + 1.15));
+      // Spawn ON the island ground near the trunk, in the founder's compass
+      // direction, at a SAFE radius clamped well inside the island's collision
+      // radius (ISLAND_COLLIDER_R). The previous spawn pushed the player OUT
+      // to radius ≈ founderRadius + 6 (~12.6), which landed them PAST the
+      // island floor collider (radius 12.5) — so gravity dropped them straight
+      // into the void the instant the intro handed off ("man fällt runter").
+      // Clamped short of the edge, they always settle onto solid ground and
+      // can walk to the ladder at the trunk base.
+      const safeR = Math.min(dr, SPAWN_RADIUS);
+      const sx = (dev.x / dr) * safeR;
+      const sz = (dev.z / dr) * safeR;
+      // Low enough to settle almost immediately, high enough to clear the
+      // grass/plateau so gravity resolves the exact contact for real.
+      spawnPos.current.set(sx, TREE_Y + 2, sz);
+      introTarget.current.set(dev.x, dev.y - 0.6, dev.z);
+      introStart.current.set(dev.x * 1.9, dev.y + 7.5, dev.z * 1.9);
     } else {
-      const g = surface.heightAt(0) + EYE;
-      spawnPos.current.set(0, g, Math.min(surface.edgeR * 0.8, 6));
+      spawnPos.current.set(0, TREE_Y + 2, Math.min(SPAWN_RADIUS, 6));
       introTarget.current.set(0, TREE_Y + 6, 0);
-      introStart.current.set(0, g + 9, Math.min(surface.edgeR, 9));
+      introStart.current.set(0, TREE_Y + 12, 9);
     }
+    introControl.current.copy(introStart.current).lerp(spawnPos.current, 0.5);
+    const travel = introB.current.copy(spawnPos.current).sub(introStart.current);
+    introControl.current.y += Math.max(2.2, Math.abs(travel.y) * 0.4 + 1.4);
+    const lateral = introA.current
+      .set(-travel.z, 0, travel.x)
+      .normalize()
+      .multiplyScalar(travel.length() * 0.12);
+    introControl.current.add(lateral);
+
     camera.position.copy(introStart.current);
     camera.lookAt(introTarget.current);
     introT.current = 0;
     introing.current = true;
+    onIntroChangeRef.current?.(true);
+
     vy.current = 0;
+    grounded.current = false;
+    flying.current = false;
+    const body = bodyRef.current;
+    if (body) body.setNextKinematicTranslation(spawnPos.current);
   };
 
   useEffect(() => {
@@ -141,7 +209,26 @@ export function WalkControls({
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
       if (MOVE_KEYS.has(e.code)) e.preventDefault();
-      if (introing.current) introing.current = false; // any key skips the intro
+      const wasIntroing = introing.current;
+      if (wasIntroing) {
+        introing.current = false;
+        onIntroChangeRef.current?.(false);
+        syncLookFromCamera();
+      }
+      // Double-tap Space toggles creative-style flight (Minecraft) — only on
+      // the real first press of a tap, not the browser's key-repeat while
+      // held, and never on the SAME keypress that just cancelled the intro
+      // (that press was consumed as "stop the cinematic", not a fly-tap).
+      if (e.code === "Space" && !e.repeat && !wasIntroing) {
+        const now = performance.now();
+        if (now - lastSpaceTapAt.current < DOUBLE_TAP_MS) {
+          flying.current = !flying.current;
+          if (flying.current) vy.current = 0;
+          lastSpaceTapAt.current = 0;
+        } else {
+          lastSpaceTapAt.current = now;
+        }
+      }
       keys.current.add(e.code);
     };
     const onKeyUp = (e: KeyboardEvent) => keys.current.delete(e.code);
@@ -149,8 +236,14 @@ export function WalkControls({
       if (e.pointerType === "mouse" && e.button !== 0) return;
       e.preventDefault();
       dragging.current = true;
-      if (e.pointerType === "mouse") el.requestPointerLock?.();
-      else el.setPointerCapture?.(e.pointerId);
+      if (e.pointerType === "mouse") {
+        try {
+          const result = el.requestPointerLock?.();
+          (result as unknown as Promise<void> | undefined)?.catch?.(() => {});
+        } catch {
+          /* unsupported here — drag fallback still works */
+        }
+      } else el.setPointerCapture?.(e.pointerId);
     };
     const onPointerUp = (e: PointerEvent) => {
       if (!pointerLocked.current) dragging.current = false;
@@ -200,24 +293,26 @@ export function WalkControls({
 
   useFrame((_, dt) => {
     const d = Math.min(dt, 0.05);
+    const body = bodyRef.current;
+    const controller = controllerRef.current;
 
-    // ---- Cinematic intro: ease from the establishing shot to the spawn ----
+    // ---- Cinematic intro: quadratic-Bezier arc, camera-only ----
     if (introing.current) {
       introT.current += d / INTRO_SECONDS;
       const t = THREE.MathUtils.smoothstep(Math.min(1, introT.current), 0, 1);
-      camera.position.lerpVectors(introStart.current, spawnPos.current, t);
+      introA.current.lerpVectors(introStart.current, introControl.current, t);
+      introB.current.lerpVectors(introControl.current, spawnPos.current, t);
+      camera.position.lerpVectors(introA.current, introB.current, t);
       camera.lookAt(introTarget.current);
       if (introT.current >= 1) {
         introing.current = false;
-        euler.current.setFromQuaternion(camera.quaternion, EULER_ORDER);
-        yaw.current = smoothYaw.current = euler.current.y;
-        pitch.current = smoothPitch.current = euler.current.x;
-        vy.current = 0;
+        onIntroChangeRef.current?.(false);
+        syncLookFromCamera();
       }
       return;
     }
 
-    const key = keys.current;
+    if (!body || !controller) return;
 
     // ---- look ----
     if (lookDelta.current.x || lookDelta.current.y) {
@@ -235,69 +330,81 @@ export function WalkControls({
     euler.current.set(smoothPitch.current, smoothYaw.current, 0, EULER_ORDER);
     camera.quaternion.copy(quat.current.setFromEuler(euler.current));
 
-    const fwdPressed = key.has("KeyW") || key.has("ArrowUp");
-    const backPressed = key.has("KeyS") || key.has("ArrowDown");
-    const r = Math.hypot(camera.position.x, camera.position.z);
+    const pos = body.translation();
 
-    // ---- climb: near the trunk, look up/down + W to go up/down (ladders) ----
-    let climbing = false;
-    if (r < CLIMB_R && (fwdPressed || backPressed)) {
-      const dir = fwdPressed ? 1 : -1;
-      if (smoothPitch.current > 0.28) {
-        camera.position.y += CLIMB_SPEED * d * dir;
-        vy.current = 0;
-        climbing = true;
-      } else if (smoothPitch.current < -0.28) {
-        camera.position.y -= CLIMB_SPEED * d * dir;
-        vy.current = 0;
-        climbing = true;
-      }
+    // Fell off an edge into the void (real physics allows this now) — respawn.
+    if (pos.y < RESPAWN_Y) {
+      setup();
+      return;
     }
 
-    // ---- horizontal move (yaw-only) — suppressed while climbing ----
-    if (!climbing) {
-      yawEuler.current.set(0, smoothYaw.current, 0, EULER_ORDER);
-      forward.current.set(0, 0, -1).applyEuler(yawEuler.current);
-      right.current.set(1, 0, 0).applyEuler(yawEuler.current);
-      move.current.set(0, 0, 0);
-      if (fwdPressed) move.current.add(forward.current);
-      if (backPressed) move.current.sub(forward.current);
-      if (key.has("KeyD") || key.has("ArrowRight")) move.current.add(right.current);
-      if (key.has("KeyA") || key.has("ArrowLeft")) move.current.sub(right.current);
-      if (move.current.lengthSq() > 0) {
-        move.current.y = 0;
-        move.current.normalize().multiplyScalar(speed * d);
-        camera.position.x += move.current.x;
-        camera.position.z += move.current.z;
-      }
+    // ---- horizontal desired movement (yaw-only), weighted accel/decel ----
+    const fwdPressed = keys.current.has("KeyW") || keys.current.has("ArrowUp");
+    const backPressed = keys.current.has("KeyS") || keys.current.has("ArrowDown");
+    yawEuler.current.set(0, smoothYaw.current, 0, EULER_ORDER);
+    forward.current.set(0, 0, -1).applyEuler(yawEuler.current);
+    right.current.set(1, 0, 0).applyEuler(yawEuler.current);
+    move.current.set(0, 0, 0);
+    if (fwdPressed) move.current.add(forward.current);
+    if (backPressed) move.current.sub(forward.current);
+    if (keys.current.has("KeyD") || keys.current.has("ArrowRight")) move.current.add(right.current);
+    if (keys.current.has("KeyA") || keys.current.has("ArrowLeft")) move.current.sub(right.current);
+    const wantsMove = move.current.lengthSq() > 0;
+    if (wantsMove) {
+      move.current.y = 0;
+      move.current.normalize();
+      moveDir.current.copy(move.current);
+    }
+    const speedK = 1 - Math.exp(-d * 8);
+    const targetSpeed = wantsMove ? (flying.current ? FLY_SPEED : speed) : 0;
+    curSpeed.current += (targetSpeed - curSpeed.current) * speedK;
+
+    const spacePressed = keys.current.has("Space");
+    const shiftPressed = keys.current.has("ShiftLeft") || keys.current.has("ShiftRight");
+
+    if (flying.current) {
+      // ---- Minecraft-style creative flight: no gravity, Space/Shift move
+      // straight up/down, eased the same way horizontal speed is. ----
+      const vTarget = (spacePressed ? 1 : 0) - (shiftPressed ? 1 : 0);
+      vy.current += (vTarget * FLY_VERTICAL_SPEED - vy.current) * speedK;
+    } else {
+      // ---- gravity + jump, integrated manually (the character controller
+      // has no built-in gravity — it only RESOLVES a desired delta against
+      // obstacles) ----
+      if (grounded.current && vy.current < 0) vy.current = 0;
+      if (spacePressed && grounded.current) vy.current = JUMP_VEL;
+      else vy.current -= GRAVITY * d;
     }
 
-    // ---- gravity + ground collision (island + decks) ----
-    if (!climbing) {
-      const feet = camera.position.y - EYE;
-      const top = groundTopAt(camera.position.x, camera.position.z, feet);
-      const groundEye = top + EYE;
-      vy.current -= GRAVITY * d;
-      camera.position.y += vy.current * d;
-      let grounded = false;
-      if (top > -Infinity && camera.position.y <= groundEye) {
-        camera.position.y = groundEye;
-        vy.current = 0;
-        grounded = true;
-      }
-      if ((key.has("Space") || key.has("ShiftLeft")) && grounded) vy.current = JUMP;
-      // never fall through the world — if somehow below all ground, sit on it
-      if (top > -Infinity && camera.position.y < groundEye - 40) camera.position.y = groundEye;
-    }
+    desired.current.set(
+      moveDir.current.x * curSpeed.current * d,
+      vy.current * d,
+      moveDir.current.z * curSpeed.current * d,
+    );
 
-    // ---- no falling off the island: soft wall at the plateau/tree edge ----
-    const rr = Math.hypot(camera.position.x, camera.position.z);
-    if (rr > clampR) {
-      const k = clampR / rr;
-      camera.position.x *= k;
-      camera.position.z *= k;
-    }
+    const collider = body.collider(0);
+    controller.computeColliderMovement(collider, desired.current);
+    const computed = controller.computedMovement();
+    grounded.current = controller.computedGrounded();
+
+    const next = {
+      x: pos.x + computed.x,
+      y: pos.y + computed.y,
+      z: pos.z + computed.z,
+    };
+    body.setNextKinematicTranslation(next);
+    camera.position.set(next.x, next.y + EYE_OFFSET, next.z);
   });
 
-  return null;
+  return (
+    <RigidBody
+      ref={bodyRef}
+      type="kinematicPosition"
+      colliders={false}
+      enabledRotations={[false, false, false]}
+      position={[0, TREE_Y + 3.2, 0]}
+    >
+      <CapsuleCollider args={[CAPSULE_HALF_H, CAPSULE_R]} />
+    </RigidBody>
+  );
 }

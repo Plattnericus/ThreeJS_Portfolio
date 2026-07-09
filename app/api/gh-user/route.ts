@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { langColor } from "@/lib/langColors";
+import { guardApi } from "@/lib/apiGuard";
 
 // Real GitHub data for a single stargazer (the person a house belongs to). We
 // return enough to render a GitHub-style profile card: profile fields, pinned
@@ -111,6 +112,10 @@ async function fetchReadmeHtml(login: string): Promise<string | null> {
 }
 
 export async function GET(req: Request) {
+  // Takes a `login` param and hits GitHub — guard against enumeration/hammering.
+  const blocked = guardApi(req, { key: "gh-user", limit: 40, windowMs: 60_000 });
+  if (blocked) return blocked;
+
   const login = new URL(req.url).searchParams.get("login");
   if (!login || !/^[a-zA-Z0-9-]+$/.test(login)) {
     return NextResponse.json({ error: "bad login" }, { status: 400 });

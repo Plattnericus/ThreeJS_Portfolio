@@ -16,3 +16,23 @@ export const CLOUD_SHADOW_FRAG = `
   diffuseColor.rgb *= cloudShadow;
 }
 `;
+
+// Aerial perspective: distant ground/foliage tints toward the sky's horizon
+// color, the classic depth cue (RDR2/BSL-style haze). Requirements in the host
+// shader: uniforms uAerial (float 0..1, tier-gated strength), uHazeColor (vec3,
+// the sampled horizon/fog color); varying vWPos. `cameraPosition` is a THREE
+// built-in — no need to declare it. A plain MIX (never additive here), so the
+// result always stays a valid blend between two already-valid colors — it can
+// only ever move the shading toward the sky tint, never break it. uAerial is 0
+// on low/medium, so the whole term is inert there.
+export const AERIAL_FRAG = `
+{
+  float aeD = length(vWPos - cameraPosition);
+  // Capped well below 1.0 (0.35 ceiling) — this term used to saturate toward
+  // a near-full mix into the (light, sky-toned) haze color at typical
+  // zoomed-out orbit distances, reading as the whole tree "going whiter"
+  // when zooming out instead of a subtle atmospheric depth cue.
+  float aeHaze = (1.0 - exp(-aeD * 0.007)) * uAerial * 0.35;
+  diffuseColor.rgb = mix(diffuseColor.rgb, uHazeColor, aeHaze);
+}
+`;

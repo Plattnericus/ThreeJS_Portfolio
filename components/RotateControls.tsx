@@ -15,7 +15,7 @@ type KeyId = "up" | "down" | "left" | "right" | "shift" | "zoom";
 
 // Game-style keycap: carved wooden key with an engraved glyph. Lights up while
 // held (pointer OR the real keyboard key) and physically presses down.
-function Keycap({
+export function Keycap({
   glyph,
   active,
   wide = false,

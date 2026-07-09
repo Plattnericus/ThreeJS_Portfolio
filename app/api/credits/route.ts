@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
+import { guardApi } from "@/lib/apiGuard";
 
 // CREDITS.md (repo root) is the single source of truth for asset attributions.
 // Parse its markdown table server-side; malformed rows are skipped, never fatal.
@@ -17,7 +18,10 @@ function isSeparatorCell(cell: string): boolean {
   return /^:?-{3,}:?$/.test(cell);
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const blocked = guardApi(req, { key: "credits", limit: 30, windowMs: 60_000 });
+  if (blocked) return blocked;
+
   try {
     const raw = await fs.readFile(path.join(process.cwd(), "CREDITS.md"), "utf8");
     const credits: Credit[] = [];

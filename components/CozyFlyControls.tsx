@@ -76,8 +76,15 @@ export function CozyFlyControls({
       if (event.pointerType === "mouse" && event.button !== 0) return;
       event.preventDefault();
       dragging.current = true;
+      // Modern Chrome's requestPointerLock() returns a Promise that can
+      // REJECT (not throw) — catch both forms, or it's an unhandled rejection.
       if (event.pointerType === "mouse") {
-        el.requestPointerLock?.();
+        try {
+          const result = el.requestPointerLock?.();
+          (result as unknown as Promise<void> | undefined)?.catch?.(() => {});
+        } catch {
+          /* unsupported here — drag fallback still works */
+        }
       } else {
         el.setPointerCapture?.(event.pointerId);
       }

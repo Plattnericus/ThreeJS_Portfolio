@@ -5,7 +5,7 @@ import { useFrame } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import type { SurfaceProfile } from "@/lib/surface";
-import { CLOUD_SHADOW_FRAG } from "@/lib/shaderChunks";
+import { AERIAL_FRAG, CLOUD_SHADOW_FRAG } from "@/lib/shaderChunks";
 
 const GRASS = "/models/grass.glb";
 const TMP = new THREE.Object3D();
@@ -36,6 +36,8 @@ export function GrassClumps({
   windVec = [1, 0],
   cloudCover = 0,
   surface,
+  aerial = 0,
+  hazeColor = "#a8c4de",
 }: {
   count?: number;
   radius?: number;
@@ -45,6 +47,8 @@ export function GrassClumps({
   windVec?: [number, number];
   cloudCover?: number;
   surface?: SurfaceProfile;
+  aerial?: number;
+  hazeColor?: string;
 }) {
   const { scene } = useGLTF(GRASS);
   const uniforms = useRef({
@@ -52,6 +56,8 @@ export function GrassClumps({
     uWind: { value: wind },
     uWindDir: { value: new THREE.Vector2(windVec[0], windVec[1]) },
     uCloudCover: { value: cloudCover },
+    uAerial: { value: aerial },
+    uHazeColor: { value: new THREE.Color(hazeColor) },
   });
 
   // Normalise every brush layer to a unit-height tuft with its base at y=0,
@@ -85,6 +91,8 @@ export function GrassClumps({
         shader.uniforms.uWind = uniforms.current.uWind;
         shader.uniforms.uWindDir = uniforms.current.uWindDir;
         shader.uniforms.uCloudCover = uniforms.current.uCloudCover;
+        shader.uniforms.uAerial = uniforms.current.uAerial;
+        shader.uniforms.uHazeColor = uniforms.current.uHazeColor;
         shader.vertexShader =
           "uniform float uTime;\nuniform float uWind;\nuniform vec2 uWindDir;\nvarying vec3 vWPos;\n" +
           shader.vertexShader.replace(
@@ -103,10 +111,10 @@ export function GrassClumps({
              vWPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;`,
           );
         shader.fragmentShader =
-          "uniform float uTime;\nuniform vec2 uWindDir;\nuniform float uCloudCover;\nvarying vec3 vWPos;\n" +
+          "uniform float uTime;\nuniform vec2 uWindDir;\nuniform float uCloudCover;\nuniform float uAerial;\nuniform vec3 uHazeColor;\nvarying vec3 vWPos;\n" +
           shader.fragmentShader.replace(
             "#include <color_fragment>",
-            `#include <color_fragment>\n${CLOUD_SHADOW_FRAG}`,
+            `#include <color_fragment>\n${CLOUD_SHADOW_FRAG}\n${AERIAL_FRAG}`,
           );
       };
       m.needsUpdate = true;
@@ -154,6 +162,8 @@ export function GrassClumps({
     uniforms.current.uWind.value = 0.45 + wind * 0.75 + gust * 0.16;
     uniforms.current.uWindDir.value.set(windVec[0], windVec[1]).normalize();
     uniforms.current.uCloudCover.value = cloudCover;
+    uniforms.current.uAerial.value = aerial;
+    uniforms.current.uHazeColor.value.set(hazeColor);
   });
 
   if (count <= 0) return null;

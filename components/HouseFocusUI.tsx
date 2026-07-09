@@ -17,6 +17,16 @@ import { useI18n, type Locale, type MsgKey } from "@/lib/i18n";
 import { CloseIcon, StarIcon } from "./Icons";
 import { WOOD } from "./TrunkRings";
 
+function ExternalLinkIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+      <path d="M15 3h6v6" />
+      <path d="M10 14 21 3" />
+    </svg>
+  );
+}
+
 type FocusCopy = {
   rarity: string;
   details: string;
@@ -724,9 +734,6 @@ function FocusCard({
           <h2 className="truncate text-[17px] font-black leading-tight" style={{ color: WOOD.text }}>
             {facts.name}
           </h2>
-          <p className="mt-1 text-[11px] leading-snug" style={{ color: WOOD.textDim }}>
-            {facts.copy.clickAgain}
-          </p>
         </div>
         <button
           type="button"
@@ -765,23 +772,30 @@ function FocusCard({
         >
           <StarIcon className="h-3.5 w-3.5" />
           {facts.copy.profile}
+          <span className="grid h-4 w-4 place-items-center rounded border border-current text-[9px] opacity-70">
+            O
+          </span>
         </button>
+        <a
+          href={facts.profileUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={facts.copy.github}
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border transition hover:brightness-110 active:scale-[0.98]"
+          style={{ ...insetStyle, color: WOOD.accent }}
+        >
+          <ExternalLinkIcon className="h-4 w-4" />
+        </a>
         <button
           type="button"
           onClick={onOpenInfo}
-          className="flex items-center justify-center gap-2 rounded-xl border px-3 py-2 text-[12px] font-black transition hover:brightness-110 active:scale-[0.98]"
+          aria-label={facts.copy.details}
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border text-[11px] font-black transition hover:brightness-110 active:scale-[0.98]"
           style={{ ...insetStyle, color: WOOD.accent }}
         >
-          <span className="grid h-5 w-5 place-items-center rounded-md border text-[11px]" style={insetStyle}>
-            I
-          </span>
-          {facts.copy.details}
+          I
         </button>
       </div>
-
-      <p data-focus-item className="mt-2 text-[10.5px]" style={{ color: WOOD.textDim }}>
-        {facts.copy.pressInfo}
-      </p>
     </aside>
   );
 }

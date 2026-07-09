@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
 import type { StarRepo } from "@/lib/stargazers";
+import { guardApi } from "@/lib/apiGuard";
 
 // Top repos for one user — fetched lazily when a house is opened, so we make at
 // most one request per click (stays well under the token-free 60/h limit).
 export const revalidate = 600;
 
 export async function GET(req: Request) {
+  const blocked = guardApi(req, { key: "user-repos", limit: 40, windowMs: 60_000 });
+  if (blocked) return blocked;
+
   const login = new URL(req.url).searchParams.get("login");
   if (!login || !/^[a-zA-Z0-9-]+$/.test(login)) {
     return NextResponse.json({ repos: [] });

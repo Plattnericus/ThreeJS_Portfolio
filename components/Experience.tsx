@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import {
   Float,
   OrbitControls,
@@ -20,6 +20,7 @@ import {
   Vignette,
 } from "@react-three/postprocessing";
 import { ToneMappingMode } from "postprocessing";
+import { CuboidCollider, CylinderCollider, Physics, RigidBody } from "@react-three/rapier";
 import * as THREE from "three";
 import { sampleIslandSurface } from "@/lib/surface";
 import { sampleBranchAnchors } from "@/lib/branches";
@@ -319,7 +320,7 @@ function VolumetricClouds({
 function CameraRotateDriver() {
   useFrame((state, dt) => {
     const camera = state.camera as THREE.PerspectiveCamera;
-    const targetFov = cameraBus.zoom ? ZOOM_FOV : DEFAULT_FOV;
+    const targetFov = cameraBus.zoom ? ZOOM_FOV : cameraBus.baseFov;
     if (Math.abs(camera.fov - targetFov) > 0.02) {
       camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 12);
       camera.updateProjectionMatrix();
@@ -415,6 +416,73 @@ function SceneReadySignal({ onReady }: { onReady?: () => void }) {
   return null;
 }
 
+// Restores ACES tone mapping on the renderer whenever the postprocessing
+// EffectComposer isn't the one rendering (it's disabled during camera moves
+// and absent on the lowest tiers). Without this, a dragged orbit renders
+// un-tonemapped and washes out to near-white; a still orbit re-tonemaps via
+// the composer's own ToneMapping effect. Setting it every frame (a cheap
+// property write) beats an effect because it can't be clobbered mid-frame by
+// the composer re-asserting NoToneMapping on the transition frame.
+function ToneMappingBridge({ composerAsleep }: { composerAsleep: boolean }) {
+  const gl = useThree((s) => s.gl);
+  useFrame(() => {
+    const want = composerAsleep ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+    if (gl.toneMapping !== want) {
+      gl.toneMapping = want;
+      gl.toneMappingExposure = 1.12;
+    }
+  });
+  return null;
+}
+
+// Refreshes the shadow map only every `stride`-th frame (renderer.shadowMap.
+// autoUpdate is off, set in onCreated). Shadows live in WORLD space, so camera
+// movement never changes them — only the (slow) sun and wind-swaying casters
+// do, both imperceptible at a 2-frame / 30Hz cadence. Halves the shadow-render
+// cost (a full re-render of every caster) with no visible change.
+function ShadowThrottle({ stride = 2 }: { stride?: number }) {
+  const gl = useThree((s) => s.gl);
+  const frame = useRef(0);
+  useFrame(() => {
+    frame.current = (frame.current + 1) % stride;
+    gl.shadowMap.needsUpdate = frame.current === 0;
+  }, -1);
+  return null;
+}
+
+// An INVISIBLE ring of overlapping box colliders around the island's edge —
+// a real physics wall (walk-mode only), not a position clamp: the character
+// controller's own collision resolution stops you at the edge, so it works
+// the same way solid ground does (slide along it, can't be shoved through).
+// Tall enough to block the whole vertical span from below the island to
+// above the highest platform, so there's no way to walk off the edge at any
+// height and fall into the void.
+// Matches the ground CylinderCollider's own radius (12.5, right below this
+// component's usage) exactly — the wall and the walkable ground must agree
+// on where the island's edge is, or there'd be a gap of "solid ground with
+// no wall yet" or "wall standing in open air" past the real edge.
+function IslandBoundary({ radius = 12.5 }: { radius?: number }) {
+  const segments = 22;
+  const wallHalfHeight = 26;
+  const wallHalfThickness = 0.6;
+  const segHalfLen = ((Math.PI * radius) / segments) * 1.15;
+  return (
+    <RigidBody type="fixed" colliders={false} position={[0, TREE_Y + wallHalfHeight - 14, 0]}>
+      {Array.from({ length: segments }, (_, i) => {
+        const angle = (i / segments) * Math.PI * 2;
+        return (
+          <CuboidCollider
+            key={i}
+            args={[wallHalfThickness, wallHalfHeight, segHalfLen]}
+            position={[Math.cos(angle) * radius, 0, Math.sin(angle) * radius]}
+            rotation={[0, -angle, 0]}
+          />
+        );
+      })}
+    </RigidBody>
+  );
+}
+
 // Fills the island plateau using the sampled island surface.
 function Plateau({
   wind,
@@ -427,6 +495,8 @@ function Plateau({
   grassTufts,
   budget = 1,
   moving = false,
+  aerial = 0,
+  hazeColor,
 }: {
   wind: number;
   gust: number;
@@ -438,6 +508,8 @@ function Plateau({
   grassTufts: number;
   budget?: number;
   moving?: boolean;
+  aerial?: number;
+  hazeColor?: string;
 }) {
   const { scene } = useGLTF("/models/island.glb");
   const profile = useQualityProfile();
@@ -448,8 +520,8 @@ function Plateau({
   );
   return (
     <>
-      <Grass wind={wind} gust={gust} windVec={windVec} cloudCover={cloudCover} count={grassBlades} surface={surface} />
-      <GrassClumps wind={wind} gust={gust} windVec={windVec} cloudCover={cloudCover} count={grassTufts} surface={surface} />
+      <Grass wind={wind} gust={gust} windVec={windVec} cloudCover={cloudCover} count={grassBlades} surface={surface} aerial={aerial} hazeColor={hazeColor} />
+      <GrassClumps wind={wind} gust={gust} windVec={windVec} cloudCover={cloudCover} count={grassTufts} surface={surface} aerial={aerial} hazeColor={hazeColor} />
       <Flora radius={PLATEAU_R + 2} surface={surface} />
       <Fireflies
         night={night}
@@ -485,6 +557,7 @@ export default function Experience({
   onSelectHouse,
   onFindDove,
   onReady,
+  onIntroChange,
 }: {
   stars: number;
   params: SceneParams;
@@ -497,6 +570,7 @@ export default function Experience({
   onSelectHouse?: (i: number) => void;
   onFindDove?: () => void;
   onReady?: () => void;
+  onIntroChange?: (introing: boolean) => void;
 }) {
   const quality = QUALITY_PROFILES[graphicsQuality];
   // Night factor drives warm lights and fireflies.
@@ -519,6 +593,19 @@ export default function Experience({
   const [cameraMoving, setCameraMoving] = useState(false);
   const settleTimer = useRef<number | null>(null);
   const flying = camMode !== "orbit";
+  // Real rigidbody physics (@react-three/rapier) only mounts in walk mode —
+  // orbit/fly never need collision, so the physics world (and its trimesh
+  // collider generation cost) stays entirely out of their frame budget.
+  const inPhysics = camMode === "walk";
+  // Trimesh collider cooking (Houses/Bridges/boundary ring) is a real,
+  // one-time cost paid wherever the RigidBody-wrapped tree first mounts —
+  // latching this instead of using inPhysics directly means a visitor who
+  // never opens Walk mode (most of them, on a portfolio site) never pays it
+  // at all, not even during initial load. Once true it stays true so
+  // toggling back to orbit doesn't re-cook colliders on the next re-entry.
+  const everEnteredPhysicsRef = useRef(false);
+  if (inPhysics) everEnteredPhysicsRef.current = true;
+  const physicsEverActive = everEnteredPhysicsRef.current;
   const interactionMoving = flying || cameraMoving;
   const performanceMoving = interactionMoving || uiOverlayOpen;
   const motionDpr = Math.min(dpr, quality.movingDpr);
@@ -648,22 +735,39 @@ export default function Experience({
         gl.shadowMap.enabled = true;
         gl.shadowMap.type =
           quality.shadowType === "pcfsoft" ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+        // Manual shadow-map updates (see ShadowThrottle): the sun crawls and the
+        // shadow casters (trunk, houses, bridges) are static, so re-rendering
+        // the whole shadow map every frame is wasted GPU — we refresh it on a
+        // stride instead. autoUpdate off + needsUpdate driven per-frame.
+        gl.shadowMap.autoUpdate = false;
+        gl.shadowMap.needsUpdate = true;
         gl.toneMapping = THREE.ACESFilmicToneMapping;
         gl.toneMappingExposure = 1.12;
         gl.outputColorSpace = THREE.SRGBColorSpace;
       }}
     >
+      {/* Physics only STEPS in walk mode (paused elsewhere = ~zero cost);
+          RigidBody colliders are only added to Island/Houses/Bridges when
+          inPhysics is true (see below), so orbit/fly never pay for trimesh
+          generation either. Physics itself suspends on first mount (it
+          Suspense-loads the rapier WASM module internally via `suspend()`)
+          — needs its OWN outer Suspense boundary, since it's the PARENT of
+          the scene's existing Suspense, not a child of it (a blank scene
+          with zero console errors was exactly this: the thrown loading
+          promise had no boundary above it to catch). */}
+      <Suspense fallback={null}>
+      <Physics paused={!inPhysics} gravity={[0, -26, 0]}>
       <QualityContext.Provider value={quality}>
       <Suspense fallback={null}>
         <AssetGate />
         {/* Adaptive resolution keeps animation responsive. */}
         <PerformanceMonitor
           bounds={() => [52, 72]}
-          flipflops={4}
+          flipflops={2}
           onDecline={() => {
-            setDpr((d) => Math.max(quality.minDpr, +(d - 0.14).toFixed(2)));
-            setCloudQuality((q) => Math.max(quality.movingCloudQuality, +(q - 0.1).toFixed(2)));
-            setPerfBudget((b) => Math.max(0.45, +(b - 0.2).toFixed(2)));
+            setDpr((d) => Math.max(quality.minDpr, +(d - 0.18).toFixed(2)));
+            setCloudQuality((q) => Math.max(quality.movingCloudQuality, +(q - 0.12).toFixed(2)));
+            setPerfBudget((b) => Math.max(0.45, +(b - 0.25).toFixed(2)));
           }}
           onIncline={() => {
             setDpr((d) => Math.min(quality.maxDpr, +(d + 0.1).toFixed(2)));
@@ -717,7 +821,39 @@ export default function Experience({
           rotationIntensity={performanceMoving ? 0 : 0.1}
           floatIntensity={performanceMoving ? 0 : 0.5}
         >
-          <Island snow={params.snow} scale={ISLAND_SCALE} cloudCover={params.cloud} windVec={params.windVec} />
+          {physicsEverActive ? (
+            // Island is a ~2M-vert GLTF-derived mesh — deriving ANY collider
+            // from its actual geometry (trimesh cook stalls; hull cook threw
+            // a WASM buffer-type error, likely the cloned GLTF's attribute
+            // format) is unreliable. A hand-authored primitive sidesteps
+            // mesh-cooking entirely: cheap, 100% reliable, still a REAL
+            // rigidbody the player capsule collides against — just a
+            // simplified proxy shape for the walkable top surface, a totally
+            // standard game-dev tradeoff (visual mesh ≠ collision mesh).
+            <>
+              <RigidBody type="fixed" colliders={false}>
+                <CylinderCollider args={[3, 12.5]} position={[0, TREE_Y - 3, 0]} />
+                <Island
+                  snow={params.snow}
+                  scale={ISLAND_SCALE}
+                  cloudCover={params.cloud}
+                  windVec={params.windVec}
+                  aerial={quality.aerial}
+                  hazeColor={params.fogColor}
+                />
+              </RigidBody>
+              <IslandBoundary />
+            </>
+          ) : (
+            <Island
+              snow={params.snow}
+              scale={ISLAND_SCALE}
+              cloudCover={params.cloud}
+              windVec={params.windVec}
+              aerial={quality.aerial}
+              hazeColor={params.fogColor}
+            />
+          )}
           <Plateau
             wind={params.wind}
             gust={params.gust}
@@ -729,6 +865,8 @@ export default function Experience({
             grassTufts={quality.grassTufts}
             budget={ambientBudget}
             moving={performanceMoving}
+            aerial={quality.aerial}
+            hazeColor={params.fogColor}
           />
           <group position={[0, TREE_Y, 0]} scale={TREE_BOOST}>
             <Tree
@@ -747,18 +885,40 @@ export default function Experience({
               forceProxyShadows={shadowFallback}
               stargazers={stargazers}
             >
-              <Houses
-                stars={stars}
-                wind={params.wind}
-                highlight={highlight}
-                focused={focusedHouse}
-                night={night}
-                stargazers={stargazers}
-                interactive={!flying}
-                onSelect={onSelectHouse}
-                moving={performanceMoving}
-              />
-              <Bridges stars={stars} night={night} stargazers={stargazers} />
+              {physicsEverActive ? (
+                <RigidBody type="fixed" colliders="trimesh">
+                  <Houses
+                    stars={stars}
+                    wind={params.wind}
+                    highlight={highlight}
+                    focused={focusedHouse}
+                    night={night}
+                    stargazers={stargazers}
+                    interactive={!flying}
+                    onSelect={onSelectHouse}
+                    moving={performanceMoving}
+                  />
+                </RigidBody>
+              ) : (
+                <Houses
+                  stars={stars}
+                  wind={params.wind}
+                  highlight={highlight}
+                  focused={focusedHouse}
+                  night={night}
+                  stargazers={stargazers}
+                  interactive={!flying}
+                  onSelect={onSelectHouse}
+                  moving={performanceMoving}
+                />
+              )}
+              {physicsEverActive ? (
+                <RigidBody type="fixed" colliders="trimesh">
+                  <Bridges stars={stars} night={night} stargazers={stargazers} />
+                </RigidBody>
+              ) : (
+                <Bridges stars={stars} night={night} stargazers={stargazers} />
+              )}
               <Ants
                 stars={stars}
                 stargazers={stargazers}
@@ -794,10 +954,23 @@ export default function Experience({
             {postEffects}
           </EffectComposer>
         )}
+        {/* Keeps ACES tone mapping consistent when the composer sleeps. The
+            postprocessing composer sets gl.toneMapping = NoToneMapping (its
+            own <ToneMapping> effect does ACES), but on `enabled={false}` it
+            just stops rendering WITHOUT restoring the renderer's tone mapping
+            — so the plain auto-render during a camera drag came out
+            un-tonemapped (washed-out / "geht weiß"). This restores ACES on
+            the renderer exactly while the composer is asleep, so a dragged
+            orbit looks identical to a still one. */}
+        <ToneMappingBridge composerAsleep={!postEnabled || performanceMoving} />
+        <ShadowThrottle stride={2} />
       </Suspense>
       </QualityContext.Provider>
 
-      {!flying && <CameraRotateDriver />}
+      {/* FOV easing runs in every mode (user-adjustable base FOV from
+          Settings); the rotate/tilt part of this driver safely no-ops
+          without OrbitControls (state.controls is null in fly/walk). */}
+      <CameraRotateDriver />
       {!flying && (
         <CameraFocusRig
           defaultTarget={orbitTarget}
@@ -821,10 +994,17 @@ export default function Experience({
           onEnd={markCameraSettling}
         />
       ) : camMode === "walk" ? (
-        <WalkControls speed={6} stars={stars} stargazers={stargazers} />
+        <WalkControls
+          speed={6}
+          stars={stars}
+          stargazers={stargazers}
+          onIntroChange={onIntroChange}
+        />
       ) : (
         <CozyFlyControls speed={8} />
       )}
+      </Physics>
+      </Suspense>
     </Canvas>
   );
 }

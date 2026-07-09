@@ -1,7 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import gsap from "gsap";
 import SettingsMenu, { type ManualDate } from "@/components/SettingsMenu";
 import Clock from "@/components/Clock";
 import RotateControls from "@/components/RotateControls";
@@ -10,16 +11,18 @@ import {
   type GraphicsQuality,
   type ResolvedGraphicsQuality,
 } from "@/lib/quality";
-import { I18nProvider, useI18n, type Locale } from "@/lib/i18n";
+import { runGraphicsBenchmark } from "@/lib/benchmark";
+import { I18nProvider, useI18n, type Locale, type MsgKey } from "@/lib/i18n";
 import { useCoarsePointer } from "@/lib/useCoarsePointer";
 import SearchBar from "@/components/SearchBar";
 import HouseInterior from "@/components/HouseInterior";
 import HouseFocusUI from "@/components/HouseFocusUI";
 import GameHUD from "@/components/GameHUD";
+import RateLimitNotice from "@/components/RateLimitNotice";
 import MemorialSecret from "@/components/MemorialSecret";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import { FlyIcon } from "@/components/Icons";
-import { type CamMode } from "@/lib/cameraBus";
+import { cameraBus, DEFAULT_FOV, MAX_FOV, MIN_FOV, type CamMode } from "@/lib/cameraBus";
 import { nameForHouse, type Stargazer } from "@/lib/stargazers";
 import { resolveTier, TIER_RANK } from "@/lib/rarity";
 import { nowInZone } from "@/lib/astro";
@@ -43,6 +46,7 @@ const Experience = dynamic(() => import("@/components/Experience"), {
 const STARGAZER_REFRESH_MS = 5 * 60 * 1000;
 const LOADER_INTRO_MS = 900;
 const GRAPHICS_STORAGE_KEY = "star-tree-graphics-quality";
+const FOV_STORAGE_KEY = "star-tree-fov";
 
 function isTextInputTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -50,31 +54,25 @@ function isTextInputTarget(target: EventTarget | null): boolean {
   return tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable;
 }
 
-// Auto-detect stays conservative: it never resolves to "extreme" — that tier is
-// opt-in only, so auto users always land on a 60fps-safe profile.
-function detectGraphicsQuality(): ResolvedGraphicsQuality {
-  if (typeof window === "undefined" || typeof navigator === "undefined") return "medium";
-  const nav = navigator as Navigator & { deviceMemory?: number };
-  const narrow = Math.min(window.innerWidth, window.innerHeight) < 820;
-  const touchFirst = navigator.maxTouchPoints > 1 && narrow;
-  const cores = navigator.hardwareConcurrency || 4;
-  const memory = nav.deviceMemory ?? (touchFirst ? 4 : 8);
-
-  if (touchFirst || cores <= 4 || memory <= 4) return "low";
-  // Capable desktops/laptops get "high" (bloom + MSAA + SMAA) even on HiDPI —
-  // the old `dpr <= 1.5` gate dumped every Retina Mac onto AA-less "medium".
-  if (cores >= 8 && memory >= 8 && window.innerWidth >= 1280) return "high";
-  return "medium";
-}
-
-// Camera-mode labels (localized for the primary locales; falls back to English).
-const MODE_LABELS: Partial<Record<Locale, Record<"orbit" | "fly" | "walk", string>>> = {
+// Camera-mode labels, one entry per supported locale (typed `satisfies` so a
+// missing translation fails the build instead of silently falling back).
+const MODE_LABELS = {
   de: { orbit: "Ansicht", fly: "Fliegen", walk: "Gehen" },
   en: { orbit: "Orbit", fly: "Fly", walk: "Walk" },
   it: { orbit: "Vista", fly: "Vola", walk: "Cammina" },
   es: { orbit: "Vista", fly: "Volar", walk: "Andar" },
   fr: { orbit: "Vue", fly: "Voler", walk: "Marcher" },
-};
+  pt: { orbit: "Vista", fly: "Voar", walk: "Andar" },
+  nl: { orbit: "Weergave", fly: "Vliegen", walk: "Lopen" },
+  pl: { orbit: "Widok", fly: "Lot", walk: "Chodzenie" },
+  ru: { orbit: "Обзор", fly: "Полёт", walk: "Ходьба" },
+  tr: { orbit: "Görünüm", fly: "Uçuş", walk: "Yürüyüş" },
+  zh: { orbit: "环视", fly: "飞行", walk: "行走" },
+  ja: { orbit: "周回", fly: "飛行", walk: "歩行" },
+  ko: { orbit: "궤도", fly: "비행", walk: "걷기" },
+  hi: { orbit: "परिक्रमा", fly: "उड़ान", walk: "चलना" },
+  ar: { orbit: "مدار", fly: "طيران", walk: "مشي" },
+} satisfies Record<Locale, Record<"orbit" | "fly" | "walk", string>>;
 
 function OrbitIcon({ className }: { className?: string }) {
   return (
@@ -82,6 +80,41 @@ function OrbitIcon({ className }: { className?: string }) {
       <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />
       <ellipse cx="12" cy="12" rx="9" ry="4.2" />
     </svg>
+  );
+}
+
+// Cheap DOM overlay for the walk-mode cinematic intro: fade-from-black flash
+// on entry + letterbox bars for the duration, driven purely by the `active`
+// boolean lifted from WalkControls' `introing` ref (same source of truth the
+// arc/skip logic uses — no separate skip state machine). No Canvas cost.
+function IntroOverlay({ active }: { active: boolean }) {
+  const [flash, setFlash] = useState(active);
+  useEffect(() => {
+    if (!active) return;
+    setFlash(true);
+    const id = window.setTimeout(() => setFlash(false), 550);
+    return () => window.clearTimeout(id);
+  }, [active]);
+
+  if (!active && !flash) return null;
+
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-0 z-30 overflow-hidden">
+      <div
+        className="absolute inset-0 bg-black transition-opacity duration-500 ease-out"
+        style={{ opacity: flash ? 1 : 0 }}
+      />
+      <div
+        className={`absolute inset-x-0 top-0 bg-black transition-all duration-700 ease-out ${
+          active ? "h-[8vh] opacity-100" : "h-0 opacity-0"
+        }`}
+      />
+      <div
+        className={`absolute inset-x-0 bottom-0 bg-black transition-all duration-700 ease-out ${
+          active ? "h-[8vh] opacity-100" : "h-0 opacity-0"
+        }`}
+      />
+    </div>
   );
 }
 
@@ -93,6 +126,41 @@ function WalkIcon({ className }: { className?: string }) {
       <path d="M12.5 8l3 2.2 3-1" />
       <path d="M10.5 12l-3.2 1-1 4" />
     </svg>
+  );
+}
+
+const LOADING_TIPS: MsgKey[] = ["load.tip1", "load.tip2", "load.tip3", "load.tip4"];
+
+// Cycles through a short flavor-tip line every 3s with a clean GSAP
+// cross-fade — shown under the quality-switch spinner so a longer switch
+// doesn't just sit on one static line the whole time.
+function RotatingTip() {
+  const { t } = useI18n();
+  const [tipIndex, setTipIndex] = useState(0);
+  const ref = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setTipIndex((i) => (i + 1) % LOADING_TIPS.length);
+    }, 3000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    gsap.fromTo(
+      el,
+      { autoAlpha: 0, y: 5 },
+      { autoAlpha: 1, y: 0, duration: reduced ? 0 : 0.4, ease: "power2.out" },
+    );
+  }, [tipIndex]);
+
+  return (
+    <span ref={ref} className="text-[11px] text-white/50">
+      {t(LOADING_TIPS[tipIndex])}
+    </span>
   );
 }
 
@@ -114,6 +182,9 @@ function Home() {
   // the settings panel so you can tell how fresh the village is.
   const [lastSync, setLastSync] = useState<number | null>(null);
   const [nextSync, setNextSync] = useState<number | null>(null);
+  // Set only when the last stargazer fetch actually hit GitHub's rate limit
+  // (not just "no data yet") — surfaced as a small dismissible HUD notice.
+  const [rateLimited, setRateLimited] = useState(false);
   const [starsReady, setStarsReady] = useState(false);
   const [weatherReady, setWeatherReady] = useState(false);
 
@@ -125,6 +196,13 @@ function Home() {
   const [searchActive, setSearchActive] = useState(-1);
   const [camMode, setCamMode] = useState<CamMode>("orbit");
   const flying = camMode !== "orbit";
+  // Walk mode's cinematic intro (arc flythrough) — lifted out of the Canvas so
+  // the fade/letterbox overlay and crosshair suppression can live in the DOM.
+  const [introing, setIntroing] = useState(false);
+  useEffect(() => {
+    if (camMode !== "walk") setIntroing(false);
+  }, [camMode]);
+  const walkIntroing = camMode === "walk" && introing;
   const [focusedHouse, setFocusedHouse] = useState<number | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
@@ -137,6 +215,13 @@ function Home() {
   const [graphicsQuality, setGraphicsQuality] = useState<GraphicsQuality>("auto");
   const [resolvedGraphicsQuality, setResolvedGraphicsQuality] =
     useState<ResolvedGraphicsQuality>("medium");
+  const [autoTierReady, setAutoTierReady] = useState(false);
+  const [fov, setFov] = useState(DEFAULT_FOV);
+  const handleFov = (n: number) => {
+    setFov(n);
+    cameraBus.baseFov = n;
+    window.localStorage.setItem(FOV_STORAGE_KEY, String(n));
+  };
   const now = new Date();
   const [date, setDate] = useState<ManualDate>({
     year: now.getFullYear(),
@@ -190,9 +275,30 @@ function Home() {
     return () => window.removeEventListener("keydown", onKey);
   }, [flying, focusedHouse, menuOpen, secretOpen, selected]);
 
+  // "O" opens the in-app profile preview for the focused house (same action
+  // as the Profil button) — a keyboard shortcut alongside "I" for info.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "o" || isTextInputTarget(event.target) || flying) return;
+      if (focusedHouse === null || selected !== null || secretOpen || menuOpen) return;
+      event.preventDefault();
+      setInfoOpen(false);
+      setSelected(focusedHouse);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [flying, focusedHouse, menuOpen, secretOpen, selected]);
+
   useEffect(() => {
     const saved = window.localStorage.getItem(GRAPHICS_STORAGE_KEY);
     if (isGraphicsQuality(saved)) setGraphicsQuality(saved);
+  }, []);
+
+  useEffect(() => {
+    const saved = Number(window.localStorage.getItem(FOV_STORAGE_KEY));
+    const n = Number.isFinite(saved) && saved >= MIN_FOV && saved <= MAX_FOV ? saved : DEFAULT_FOV;
+    setFov(n);
+    cameraBus.baseFov = n;
   }, []);
 
   // QA override: ?hour=21&sky=storm&day=3&month=7 forces manual weather so any
@@ -218,16 +324,50 @@ function Home() {
 
   useEffect(() => {
     window.localStorage.setItem(GRAPHICS_STORAGE_KEY, graphicsQuality);
-    setResolvedGraphicsQuality(
-      graphicsQuality === "auto" ? detectGraphicsQuality() : graphicsQuality,
-    );
+    if (graphicsQuality !== "auto") {
+      setResolvedGraphicsQuality(graphicsQuality);
+      setAutoTierReady(true);
+      return;
+    }
+    // Auto-tier is now a measured real benchmark (short hidden-canvas probe),
+    // not a cores/memory guess — runs in parallel with the stars/weather
+    // fetches below, bounded well under the loader's own minimum visible
+    // time, so it never delays first paint. Always resolves (falls back to a
+    // static heuristic internally if the probe is inconclusive).
+    let cancelled = false;
+    runGraphicsBenchmark().then((tier) => {
+      if (cancelled) return;
+      setResolvedGraphicsQuality(tier);
+      setAutoTierReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [graphicsQuality]);
 
   const initialDataReady = starsReady && weatherReady;
 
   useEffect(() => {
-    if (loaderIntroDone && initialDataReady) setMountScene(true);
-  }, [initialDataReady, loaderIntroDone]);
+    if (loaderIntroDone && initialDataReady && autoTierReady) setMountScene(true);
+  }, [initialDataReady, loaderIntroDone, autoTierReady]);
+
+  // The Canvas remounts on quality-tier change (`key={graphicsQuality}` in
+  // Experience.tsx — a full shader/asset recompile). Show a small "switching
+  // quality" overlay for that remount instead of a stutter — the fancy
+  // one-shot LoadingOverlay below locks itself hidden after the first reveal
+  // (its `revealed` ref), so it deliberately never comes back on its own.
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  useEffect(() => {
+    if (sceneReady) setHasLoadedOnce(true);
+  }, [sceneReady]);
+  const prevResolvedQuality = useRef(resolvedGraphicsQuality);
+  useEffect(() => {
+    if (prevResolvedQuality.current !== resolvedGraphicsQuality) {
+      prevResolvedQuality.current = resolvedGraphicsQuality;
+      setSceneReady(false);
+    }
+  }, [resolvedGraphicsQuality]);
+  const switchingQuality = hasLoadedOnce && !sceneReady;
 
   useEffect(() => {
     // Refresh stargazers every 5 minutes so new stars grow the tree live.
@@ -242,6 +382,7 @@ function Home() {
           const syncedAt = typeof d.fetchedAt === "number" ? d.fetchedAt : Date.now();
           setLastSync(syncedAt);
           setNextSync(Date.now() + STARGAZER_REFRESH_MS);
+          setRateLimited(Boolean(d.rateLimited));
           setStarsReady(true);
         })
         .catch(() => {
@@ -375,7 +516,7 @@ function Home() {
   };
 
   const highlight = focusedHouse ?? searchActive;
-  const modeLabels = MODE_LABELS[locale] ?? MODE_LABELS.en!;
+  const modeLabels = MODE_LABELS[locale];
   const overlayOpen = menuOpen || selected !== null || secretOpen || infoOpen;
 
   return (
@@ -398,9 +539,22 @@ function Home() {
             onSelectHouse={handleHouseClick}
             onFindDove={() => setSecretOpen(true)}
             onReady={() => setSceneReady(true)}
+            onIntroChange={setIntroing}
           />
         )}
       </div>
+      <IntroOverlay active={walkIntroing} />
+      {switchingQuality && (
+        <div className="pointer-events-none fixed inset-0 z-40 grid place-items-center bg-[#0b1320]/72 backdrop-blur-sm transition-opacity duration-300">
+          <div className="flex flex-col items-center gap-3 text-white/85">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/25 border-t-white/85" />
+            <span className="text-xs font-medium uppercase tracking-[0.14em]">
+              {t("load.quality")}
+            </span>
+            <RotatingTip />
+          </div>
+        </div>
+      )}
       <LoadingOverlay
         sceneReady={sceneReady}
         dataReady={initialDataReady}
@@ -441,7 +595,47 @@ function Home() {
                 <button
                   key={m}
                   type="button"
-                  onClick={() => setCamMode(m)}
+                  onClick={() => {
+                    setCamMode(m);
+                    // Triggered inside the click handler — both fullscreen and
+                    // pointer-lock require a direct user gesture, which a later
+                    // effect (after the mode-switch re-render) would no longer
+                    // count as. The canvas already exists here: it mounts once
+                    // on scene-ready and persists across mode switches, only
+                    // the controls component swaps.
+                    //
+                    // Pointer-lock is requested AFTER fullscreen resolves, not
+                    // synchronously alongside it — calling both at once throws
+                    // "WrongDocumentError: root document ... not valid for
+                    // pointer lock" in Chrome (the fullscreen transition can
+                    // briefly reparent the document tree). Chaining off the
+                    // Promise keeps it in the same user-activation window.
+                    if (m === "orbit") {
+                      if (document.fullscreenElement) {
+                        document.exitFullscreen?.().catch(() => {});
+                      }
+                      return;
+                    }
+                    // Modern Chrome's requestPointerLock() returns a Promise
+                    // that REJECTS (e.g. WrongDocumentError) instead of
+                    // throwing synchronously — a plain try/catch does not
+                    // catch that; the returned promise itself needs a .catch,
+                    // or it surfaces as an unhandled rejection. Older
+                    // browsers can still throw synchronously, so guard both.
+                    const lock = () => {
+                      try {
+                        const result = document.querySelector("canvas")?.requestPointerLock?.();
+                        (result as unknown as Promise<void> | undefined)?.catch?.(() => {});
+                      } catch {
+                        /* environment doesn't support it — fine, orbit still works */
+                      }
+                    };
+                    if (document.fullscreenElement) {
+                      lock();
+                    } else {
+                      document.documentElement.requestFullscreen?.().then(lock).catch(lock);
+                    }
+                  }}
                   aria-label={modeLabels[m]}
                   aria-pressed={active}
                   className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition active:scale-95 ${
@@ -463,7 +657,10 @@ function Home() {
             })}
           </div>
         )}
-        {flying && !coarse && <GameHUD mode={camMode === "walk" ? "walk" : "fly"} />}
+        {flying && !coarse && !walkIntroing && (
+          <GameHUD mode={camMode === "walk" ? "walk" : "fly"} />
+        )}
+        <RateLimitNotice active={rateLimited} />
 
         {selected !== null && (
           <HouseInterior
@@ -512,15 +709,18 @@ function Home() {
           nextSync={nextSync}
           graphicsQuality={graphicsQuality}
           resolvedGraphicsQuality={resolvedGraphicsQuality}
+          fov={fov}
           open={menuOpen}
           onOpenChange={setMenuOpen}
           onMode={setMode}
           onDate={setDate}
           onSky={setManualSky}
           onGraphicsQuality={setGraphicsQuality}
+          onFov={handleFov}
           onReset={() => {
             const fresh = new Date();
             setGraphicsQuality("auto");
+            handleFov(DEFAULT_FOV);
             setMode("live");
             setManualSky("clear");
             setDate({

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import type { SurfaceProfile } from "@/lib/surface";
-import { CLOUD_SHADOW_FRAG } from "@/lib/shaderChunks";
+import { AERIAL_FRAG, CLOUD_SHADOW_FRAG } from "@/lib/shaderChunks";
 
 // A slim, tapered, slightly curved grass blade (pivot at the base so it sways).
 function bladeGeometry() {
@@ -48,6 +48,8 @@ export function Grass({
   windVec = [1, 0],
   cloudCover = 0,
   surface,
+  aerial = 0,
+  hazeColor = "#a8c4de",
 }: {
   count?: number;
   radius?: number;
@@ -57,6 +59,8 @@ export function Grass({
   windVec?: [number, number];
   cloudCover?: number;
   surface?: SurfaceProfile;
+  aerial?: number;
+  hazeColor?: string;
 }) {
   const geom = useMemo(bladeGeometry, []);
   const ref = useRef<THREE.InstancedMesh>(null);
@@ -65,6 +69,8 @@ export function Grass({
     uWind: { value: wind },
     uWindDir: { value: new THREE.Vector2(windVec[0], windVec[1]) },
     uCloudCover: { value: cloudCover },
+    uAerial: { value: aerial },
+    uHazeColor: { value: new THREE.Color(hazeColor) },
   });
 
   const material = useMemo(() => {
@@ -78,9 +84,14 @@ export function Grass({
       shader.uniforms.uWind = uniforms.current.uWind;
       shader.uniforms.uWindDir = uniforms.current.uWindDir;
       shader.uniforms.uCloudCover = uniforms.current.uCloudCover;
+      shader.uniforms.uAerial = uniforms.current.uAerial;
+      shader.uniforms.uHazeColor = uniforms.current.uHazeColor;
       shader.uniforms.uTip = { value: new THREE.Color("#a9c96d") };
+      // A single mid field-green distant blades fade toward (between base
+      // #355f27 and tip) so the far carpet is smooth, not shimmering.
+      shader.uniforms.uField = { value: new THREE.Color("#4d7636") };
       shader.vertexShader =
-        "uniform float uTime;\nuniform float uWind;\nuniform vec2 uWindDir;\nattribute float aPhase;\nattribute float aSpeed;\nvarying float vH;\nvarying vec3 vWPos;\n" +
+        "uniform float uTime;\nuniform float uWind;\nuniform vec2 uWindDir;\nattribute float aPhase;\nattribute float aSpeed;\nvarying float vH;\nvarying float vDist;\nvarying vec3 vWPos;\n" +
         shader.vertexShader.replace(
           "#include <begin_vertex>",
           `#include <begin_vertex>
@@ -99,15 +110,36 @@ export function Grass({
            float lateral = bend * sin(t * 1.7 + aPhase) * 0.055 * uWind;
            transformed.x += dir.x * downwind + side.x * lateral;
            transformed.z += dir.y * downwind + side.y * lateral;
+           // Blades are sized to read well from the far-away orbit camera —
+           // at first-person (walk-mode) eye height they'd tower into the
+           // near clip plane and blind the view. Shrink each blade toward
+           // its own root as the CAMERA gets close (orbit is always far
+           // enough that this never engages); purely local-space, so it
+           // can't affect the world-space wind sway already applied above.
+           float distToCam = length(root.xz - cameraPosition.xz);
+           float nearShrink = smoothstep(1.3, 6.5, distToCam);
+           transformed *= nearShrink;
+           vDist = distToCam;
            vWPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;`,
         );
       shader.fragmentShader =
-        "uniform vec3 uTip;\nuniform float uTime;\nuniform vec2 uWindDir;\nuniform float uCloudCover;\nvarying float vH;\nvarying vec3 vWPos;\n" +
+        "uniform vec3 uTip;\nuniform vec3 uField;\nuniform float uTime;\nuniform vec2 uWindDir;\nuniform float uCloudCover;\nuniform float uAerial;\nuniform vec3 uHazeColor;\nvarying float vH;\nvarying float vDist;\nvarying vec3 vWPos;\n" +
         shader.fragmentShader.replace(
           "#include <color_fragment>",
           `#include <color_fragment>
-           diffuseColor.rgb = mix(diffuseColor.rgb, uTip, smoothstep(0.15, 1.0, vH) * 0.6);
-           ${CLOUD_SHADOW_FRAG}`,
+           // Distance anti-shimmer: thin blades go sub-pixel far away, and the
+           // bright tip vs. dark base contrast makes them ALIAS (the "grass is
+           // pixelated von weitem" the eye catches as a crawling carpet). Fade
+           // the tip-gradient contrast out AND blend toward one flat field
+           // green as blades recede, so the far field reads as smooth grass
+           // instead of a shimmering high-contrast mess. Near/mid blades (where
+           // detail is actually resolvable) are untouched.
+           float farFade = smoothstep(26.0, 52.0, vDist);
+           float tipAmt = smoothstep(0.15, 1.0, vH) * 0.6 * (1.0 - farFade * 0.8);
+           diffuseColor.rgb = mix(diffuseColor.rgb, uTip, tipAmt);
+           diffuseColor.rgb = mix(diffuseColor.rgb, uField, farFade * 0.55);
+           ${CLOUD_SHADOW_FRAG}
+           ${AERIAL_FRAG}`,
         );
     };
     return m;
@@ -156,6 +188,8 @@ export function Grass({
     uniforms.current.uWind.value = 0.5 + wind * 0.75 + gust * 0.18;
     uniforms.current.uWindDir.value.set(windVec[0], windVec[1]).normalize();
     uniforms.current.uCloudCover.value = cloudCover;
+    uniforms.current.uAerial.value = aerial;
+    uniforms.current.uHazeColor.value.set(hazeColor);
   });
 
   return (

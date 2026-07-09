@@ -4,6 +4,7 @@ import os from "os";
 import path from "path";
 import type { Stargazer } from "@/lib/stargazers";
 import { maxTier, tierFromContributor, tierFromProfile } from "@/lib/rarity";
+import { guardApi } from "@/lib/apiGuard";
 
 const REPO = process.env.GITHUB_REPO ?? "Plattnericus/ThreeJS_Portfolio";
 const ENRICH = 40; // how many stargazers to enrich with a profile fetch
@@ -31,6 +32,9 @@ type Payload = {
   live: boolean;
   stargazers: Stargazer[] | null;
   fetchedAt: number;
+  // True only when the MOST RECENT GitHub fetch attempt hit the rate limit —
+  // distinct from "no data yet" (false) so the client can tell those apart.
+  rateLimited: boolean;
 };
 
 // Module-level state survives across requests within a server instance.
@@ -40,7 +44,17 @@ const state: {
   nextAttempt: number;
   inflight: Promise<Payload> | null;
   diskChecked: boolean;
-} = { cached: null, lastGood: null, nextAttempt: 0, inflight: null, diskChecked: false };
+  profileDiskChecked: boolean;
+  lastRateLimited: boolean;
+} = {
+  cached: null,
+  lastGood: null,
+  nextAttempt: 0,
+  inflight: null,
+  diskChecked: false,
+  profileDiskChecked: false,
+  lastRateLimited: false,
+};
 
 // Persistent layer: the payload is also written to disk so the cache SURVIVES
 // server restarts, dev hot-reloads (which reset module state!) and serverless
@@ -51,7 +65,8 @@ async function readDiskCache(): Promise<Payload | null> {
   try {
     const raw = await fs.readFile(CACHE_FILE, "utf8");
     const p = JSON.parse(raw) as Payload;
-    return typeof p?.fetchedAt === "number" && typeof p?.stars === "number" ? p : null;
+    if (typeof p?.fetchedAt !== "number" || typeof p?.stars !== "number") return null;
+    return { ...p, rateLimited: Boolean(p.rateLimited) };
   } catch {
     return null;
   }
@@ -64,9 +79,28 @@ function writeDiskCache(p: Payload) {
 }
 
 // Enriched profiles barely change — remember them for an hour so refreshes
-// don't re-fetch the same 30 users.
+// don't re-fetch the same 30 users. Also persisted to disk (same pattern as
+// the main payload cache) so a dev-server restart / cold start doesn't force
+// a full re-enrichment burst against the tight unauthenticated rate limit.
 const profileCache = new Map<string, { at: number; data: Partial<Stargazer> }>();
 const PROFILE_MS = 60 * 60 * 1000;
+const PROFILE_CACHE_FILE = path.join(os.tmpdir(), "star-tree-profile-cache.json");
+
+async function readProfileDiskCache(): Promise<[string, { at: number; data: Partial<Stargazer> }][] | null> {
+  try {
+    const raw = await fs.readFile(PROFILE_CACHE_FILE, "utf8");
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeProfileDiskCache() {
+  fs.writeFile(PROFILE_CACHE_FILE, JSON.stringify(Array.from(profileCache.entries()))).catch(() => {
+    /* disk cache is best-effort */
+  });
+}
 
 function ghHeaders(accept = "application/vnd.github+json") {
   const h: Record<string, string> = {
@@ -88,13 +122,14 @@ function json(data: Payload) {
   });
 }
 
-function demoPayload(): Payload {
+function demoPayload(rateLimited = false): Payload {
   return {
     repo: REPO,
     stars: Number(process.env.DEMO_STARS ?? 0),
     live: false,
     stargazers: null,
     fetchedAt: Date.now(),
+    rateLimited,
   };
 }
 
@@ -117,7 +152,7 @@ function applyContributorBoost(
   }
 }
 
-async function fetchFromGitHub(): Promise<Payload> {
+async function fetchFromGitHub(lastGood: Payload | null): Promise<Payload> {
   const authed = Boolean(process.env.GITHUB_TOKEN);
 
   // 1) repo info → star count + existence
@@ -150,6 +185,15 @@ async function fetchFromGitHub(): Promise<Payload> {
         avatarUrl: u.avatar_url,
         profileUrl: u.html_url,
       }));
+  } else if (lastGood?.stargazers?.length) {
+    // GitHub's stargazers LIST endpoint can 401 ("Requires authentication")
+    // even for a public repo when unauthenticated, distinct from the 429/403
+    // rate-limit signal `rateLimited()` checks for — so this path is easy to
+    // hit with no GITHUB_TOKEN configured. Never regress real logins we
+    // already have back to null (→ placeholder names) on a fetch hiccup; keep
+    // showing the last known-good stargazer list while `stars` still updates
+    // live from the (always-public) repo endpoint above.
+    stargazers = lastGood.stargazers;
   }
 
   // 3) contributors → who worked on the repo + their commit counts.
@@ -173,7 +217,7 @@ async function fetchFromGitHub(): Promise<Payload> {
   // Unauthenticated: stop here. Contributors are still boosted; non-contributor
   // tiers fall back to the deterministic client seed.
   if (!authed) {
-    return { repo: REPO, stars, live: true, stargazers, fetchedAt: Date.now() };
+    return { repo: REPO, stars, live: true, stargazers, fetchedAt: Date.now(), rateLimited: false };
   }
 
   // 4) enrich each stargazer with their profile → compute the REAL tier.
@@ -217,12 +261,17 @@ async function fetchFromGitHub(): Promise<Payload> {
         }
       }),
     );
+    writeProfileDiskCache();
   }
 
-  return { repo: REPO, stars, live: true, stargazers, fetchedAt: Date.now() };
+  return { repo: REPO, stars, live: true, stargazers, fetchedAt: Date.now(), rateLimited: false };
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  // The heavy work is already cached, but this stops external hammering/probing.
+  const blocked = guardApi(req, { key: "stargazers", limit: 30, windowMs: 60_000 });
+  if (blocked) return blocked;
+
   const now = Date.now();
 
   // Cold start / hot-reload: hydrate module state from the disk cache first.
@@ -234,32 +283,47 @@ export async function GET() {
       state.lastGood = disk;
     }
   }
+  if (!state.profileDiskChecked) {
+    state.profileDiskChecked = true;
+    const diskProfiles = await readProfileDiskCache();
+    if (diskProfiles) {
+      for (const [login, entry] of diskProfiles) profileCache.set(login, entry);
+    }
+  }
 
   // Fresh cache → GitHub is not touched at all.
   if (state.cached && now - state.cached.fetchedAt < CACHE_MS) {
     return json(state.cached);
   }
 
-  // Back-off window after an error → serve the last good payload meanwhile.
+  // Back-off window after an error → serve the last good payload meanwhile,
+  // tagged with whatever the last fetch attempt actually found.
   if (now < state.nextAttempt) {
-    return json(state.lastGood ?? demoPayload());
+    const fallback = state.lastGood
+      ? { ...state.lastGood, rateLimited: state.lastRateLimited }
+      : demoPayload(state.lastRateLimited);
+    return json(fallback);
   }
 
   // Coalesce: all concurrent requests share ONE GitHub refresh.
   if (!state.inflight) {
-    state.inflight = fetchFromGitHub()
+    state.inflight = fetchFromGitHub(state.lastGood)
       .then((payload) => {
         state.cached = payload;
         state.lastGood = payload;
         state.nextAttempt = 0;
+        state.lastRateLimited = false;
         writeDiskCache(payload);
         return payload;
       })
       .catch((err) => {
         // Rate-limited or failed: keep serving the previous payload and wait
-        // before trying GitHub again.
+        // before trying GitHub again. Only a genuine rate-limit hit sets the
+        // flag the client shows a notice for — other errors (network hiccup,
+        // 401 on the stargazers list, etc.) stay silent as before.
         state.nextAttempt = Date.now() + ERROR_RETRY_MS;
-        if (state.lastGood) return state.lastGood;
+        state.lastRateLimited = err instanceof Error && err.message === "rate-limited";
+        if (state.lastGood) return { ...state.lastGood, rateLimited: state.lastRateLimited };
         throw err;
       })
       .finally(() => {
@@ -270,6 +334,6 @@ export async function GET() {
   try {
     return json(await state.inflight);
   } catch {
-    return json(demoPayload());
+    return json(demoPayload(state.lastRateLimited));
   }
 }

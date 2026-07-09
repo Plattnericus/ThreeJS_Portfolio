@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { GOSSENSASS, skyFromCode } from "@/lib/weather";
+import { guardApi } from "@/lib/apiGuard";
 
 // Refresh the real Gossensass / Brenner weather every 10 minutes.
 export const revalidate = 600;
@@ -99,7 +100,11 @@ function dailyIso(daily: Record<string, unknown>, key: string): string | null {
   return Array.isArray(arr) && typeof arr[0] === "string" ? arr[0] : null;
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  // Legit use polls this ~every 10 min; 20/min/IP is generous but blocks hammering.
+  const blocked = guardApi(req, { key: "weather", limit: 20, windowMs: 60_000 });
+  if (blocked) return blocked;
+
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${GOSSENSASS.lat}` +
     `&longitude=${GOSSENSASS.lon}` +

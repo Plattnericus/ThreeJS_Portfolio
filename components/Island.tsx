@@ -4,7 +4,7 @@ import { useMemo, useRef } from "react";
 import { useFrame, type ThreeElements } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
-import { CLOUD_SHADOW_FRAG } from "@/lib/shaderChunks";
+import { AERIAL_FRAG, CLOUD_SHADOW_FRAG } from "@/lib/shaderChunks";
 
 // GLSL helpers: cheap value noise for surface variation.
 const NOISE = /* glsl */ `
@@ -27,6 +27,8 @@ function grassRockMaterial(u: {
   uTime: { value: number };
   uWindDir: { value: THREE.Vector2 };
   uCloudCover: { value: number };
+  uAerial: { value: number };
+  uHazeColor: { value: THREE.Color };
 }) {
   const mat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
   mat.onBeforeCompile = (shader) => {
@@ -34,6 +36,8 @@ function grassRockMaterial(u: {
     shader.uniforms.uTime = u.uTime;
     shader.uniforms.uWindDir = u.uWindDir;
     shader.uniforms.uCloudCover = u.uCloudCover;
+    shader.uniforms.uAerial = u.uAerial;
+    shader.uniforms.uHazeColor = u.uHazeColor;
     shader.vertexShader =
       "varying vec3 vWPos;\nvarying vec3 vWNrm;\n" +
       shader.vertexShader
@@ -46,7 +50,7 @@ function grassRockMaterial(u: {
           "#include <beginnormal_vertex>\n  vWNrm = normalize(mat3(modelMatrix)*objectNormal);",
         );
     shader.fragmentShader =
-      "uniform float uSnow;\nuniform float uTime;\nuniform vec2 uWindDir;\nuniform float uCloudCover;\nvarying vec3 vWPos;\nvarying vec3 vWNrm;\n" +
+      "uniform float uSnow;\nuniform float uTime;\nuniform vec2 uWindDir;\nuniform float uCloudCover;\nuniform float uAerial;\nuniform vec3 uHazeColor;\nvarying vec3 vWPos;\nvarying vec3 vWNrm;\n" +
       NOISE +
       shader.fragmentShader.replace(
         "#include <color_fragment>",
@@ -66,7 +70,8 @@ function grassRockMaterial(u: {
         // snow settles on up-facing surfaces
         float snowMask = smoothstep(0.35, 0.75, up + (n-0.5)*0.3) * uSnow;
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.92,0.94,0.98), snowMask);
-        ${CLOUD_SHADOW_FRAG}`,
+        ${CLOUD_SHADOW_FRAG}
+        ${AERIAL_FRAG}`,
       );
   };
   return mat;
@@ -76,11 +81,15 @@ export function Island({
   snow = 0,
   cloudCover = 0,
   windVec = [1, 0],
+  aerial = 0,
+  hazeColor = "#a8c4de",
   ...props
 }: {
   snow?: number;
   cloudCover?: number;
   windVec?: [number, number];
+  aerial?: number;
+  hazeColor?: string;
 } & ThreeElements["group"]) {
   const { scene } = useGLTF("/models/island.glb");
   const uniforms = useRef({
@@ -88,6 +97,8 @@ export function Island({
     uTime: { value: 0 },
     uWindDir: { value: new THREE.Vector2(windVec[0], windVec[1]) },
     uCloudCover: { value: cloudCover },
+    uAerial: { value: aerial },
+    uHazeColor: { value: new THREE.Color(hazeColor) },
   });
 
   const island = useMemo(() => {
@@ -109,6 +120,8 @@ export function Island({
     u.uTime.value = state.clock.elapsedTime;
     u.uWindDir.value.set(windVec[0], windVec[1]).normalize();
     u.uCloudCover.value = cloudCover;
+    u.uAerial.value = aerial;
+    u.uHazeColor.value.set(hazeColor);
   });
 
   return <primitive object={island} {...props} />;

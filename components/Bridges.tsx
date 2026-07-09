@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
@@ -27,6 +27,11 @@ const MAX_BRIDGE_SLOPE = 1.5; // …as long as it stays gentler than ~56° (rise
 const LADDER_MIN_DH = 1.0; // below this rise nothing needs a ladder
 const LADDER_MAX_RUN = 2.6; // ladder only when decks are this close horizontally
 const MAX_LADDER_HD = 11;
+
+// Virtual node id for the island surface directly under platform 0 — the ONE
+// guaranteed connector from the ground into the tree. Real platforms are
+// 0..active-1, so a negative id can never collide with one.
+const GROUND = -1;
 
 const WOOD_NOISE = /* glsl */ `
   float whash(vec3 p){ return fract(sin(dot(p, vec3(17.17, 41.93, 9.71))) * 43758.5453); }
@@ -80,7 +85,13 @@ const LADDER_WOOD = applyWoodShader(
     roughness: 0.86,
   }),
 );
-const RAIL_GAP = 0.34; // half-distance between the two rails (rung half-length)
+// Half-distance between the two rails. MUST clear the walk-mode player
+// capsule (CAPSULE_R=0.3 in WalkControls.tsx → 0.6 diameter): at the old
+// 0.34 the inner clear gap was only ~0.59 — the capsule was wedged almost
+// exactly between the rails, which is why walking felt like an invisible
+// wall blocked every direction (the character controller found it in
+// constant contact with both rails at once). 0.55 leaves ~1.0 clear.
+const RAIL_GAP = 0.55;
 const RUNG_PITCH = 0.34; // constant vertical spacing between rungs (never scaled)
 function makeLadder(length: number): THREE.BufferGeometry {
   const L = Math.max(RUNG_PITCH, length);
@@ -105,6 +116,13 @@ function makeLadder(length: number): THREE.BufferGeometry {
   return merged;
 }
 
+// A detailed procedural spiral staircase — central newel post, wedge-shaped
+// treads winding at a FIXED rise/angle pitch (never stretched, more steps for
+// a taller climb), a helix handrail (tube along a sampled curve) and small
+// balusters. This is the ONLY connector from the ground to the first
+// platform (see GROUND below) — the user explicitly prefers it over a ladder
+// for that specific climb. Exported constants let WalkControls.tsx rebuild
+// the exact same step positions for walkable stair-tread collision.
 // A STRAIGHT, flat plank walkway (no sag) built to the exact span length, so it
 // reads as a real, walkable bridge between two decks. Merged → one draw call.
 function makeFlatBridge(length: number): THREE.BufferGeometry {
@@ -223,20 +241,53 @@ export function Bridges({
     [stargazers],
   );
 
+  // GROUND sits just OUTSIDE platform 0's deck rim (offset radially outward
+  // from the trunk, same direction the deck already extends) rather than
+  // dead-center under it — centered-under hides the whole staircase behind
+  // the deck's own solid floor from every normal viewing angle. Since the
+  // column is built perfectly VERTICAL (straight up from ground to `hiY`),
+  // moving its base X/Z doesn't misalign the top — it still arrives at the
+  // exact same height, just at the edge, right where you'd naturally step
+  // off the last tread onto the deck.
+  const groundPos = useMemo(() => {
+    const p = anchors[0]?.pos;
+    if (!p) return new THREE.Vector3(0, 0, 0);
+    const dir = new THREE.Vector3(p.x, 0, p.z);
+    if (dir.lengthSq() < 0.001) dir.set(1, 0, 0);
+    dir.normalize();
+    return new THREE.Vector3(p.x, 0, p.z).addScaledVector(dir, deckRadius(0) * 0.95);
+  }, [anchors, deckRadius]);
+  // Faces the ladder's rungs toward the same outward radial direction the
+  // player approaches from (they spawn further out along this exact line —
+  // see WalkControls' setup()).
+  const stairYaw = useMemo(() => {
+    const p = anchors[0]?.pos;
+    if (!p || (p.x === 0 && p.z === 0)) return 0;
+    return Math.atan2(p.z, p.x);
+  }, [anchors]);
+  const posOf = useCallback(
+    (i: number) => (i === GROUND ? groundPos : anchors[i].pos),
+    [anchors, groundPos],
+  );
+  const radiusOf = useCallback(
+    (i: number) => (i === GROUND ? 0 : deckRadius(i)),
+    [deckRadius],
+  );
+
   const active = Math.min(anchors.length, Math.max(0, Math.floor(stars)));
 
   const edges = useMemo<[number, number, boolean][]>(() => {
     const out: [number, number, boolean][] = [];
-    if (active < 2) return out;
+    if (active < 1) return out;
 
     const classify = (
       i: number,
       j: number,
     ): { cost: number; ladder: boolean; valid: boolean; hd: number } => {
-      const a = anchors[i].pos;
-      const b = anchors[j].pos;
+      const a = posOf(i);
+      const b = posOf(j);
       const hd = Math.hypot(b.x - a.x, b.z - a.z);
-      const gap = Math.max(0, hd - deckRadius(i) - deckRadius(j));
+      const gap = Math.max(0, hd - radiusOf(i) - radiusOf(j));
       const dh = Math.abs(a.y - b.y);
       const run = Math.max(0.001, gap); // horizontal room a plank ramp has to lie in
       const slope = dh / run; // rise / run of a would-be ramp bridge
@@ -268,6 +319,14 @@ export function Bridges({
         hd,
       };
     };
+
+    // 0) The ONE guaranteed connector: island surface → founder platform. Not
+    //    subject to the degree cap or the `.valid` gate below — without this,
+    //    walking up to the tree at all had no path (the old graph only ever
+    //    spanned platform-to-platform).
+    const ground = classify(GROUND, 0);
+    out.push([GROUND, 0, ground.ladder]);
+    if (active < 2) return out;
 
     // 1) Degree-capped spanning backbone so every deck is reachable WITHOUT any
     //    platform becoming a hub. A plain MST can attach many decks to one node
@@ -327,7 +386,7 @@ export function Bridges({
       }
     }
     return out;
-  }, [active, anchors, deckRadius]);
+  }, [active, posOf, radiusOf]);
 
   // Each span's geometry, built to its EXACT length once (positions are static):
   // a flat plank bridge for ramps, a fixed-pitch ladder for near-vertical climbs.
@@ -335,35 +394,45 @@ export function Bridges({
   const spanGeos = useMemo(
     () =>
       edges.map(([i, j, isLadder]) => {
-        const a = anchors[i].pos;
-        const b = anchors[j].pos;
+        const a = posOf(i);
+        const b = posOf(j);
+        if (i === GROUND || j === GROUND) {
+          const platform = i === GROUND ? j : i;
+          const hiY = posOf(platform).y + DECK + WALKWAY_RAISE;
+          // Falling back to the plain ladder here — the same makeLadder()
+          // already proven reliable for every other near-vertical span in
+          // this tree. The custom spiral staircase kept having rendering
+          // issues (thin/near-invisible treads) that weren't worth more
+          // iteration when there's already a known-good connector shape.
+          return makeLadder(hiY - groundPos.y);
+        }
         if (isLadder) {
           const lo = a.y <= b.y ? i : j;
           const hi = lo === i ? j : i;
-          const loP = anchors[lo].pos;
-          const hiP = anchors[hi].pos;
+          const loP = posOf(lo);
+          const hiP = posOf(hi);
           const dx = hiP.x - loP.x;
           const dz = hiP.z - loP.z;
           const hd = Math.hypot(dx, dz) || 1;
           const ux = dx / hd;
           const uz = dz / hd;
-          const sep = hd - deckRadius(lo) - deckRadius(hi);
-          const ax = loP.x + ux * deckRadius(lo) * 0.86;
-          const az = loP.z + uz * deckRadius(lo) * 0.86;
+          const sep = hd - radiusOf(lo) - radiusOf(hi);
+          const ax = loP.x + ux * radiusOf(lo) * 0.99;
+          const az = loP.z + uz * radiusOf(lo) * 0.99;
           const ay = loP.y + DECK + WALKWAY_RAISE;
           const by = hiP.y + DECK + WALKWAY_RAISE;
-          const bx = sep > 0.2 ? hiP.x - ux * deckRadius(hi) * 0.86 : ax + ux * 0.3;
-          const bz = sep > 0.2 ? hiP.z - uz * deckRadius(hi) * 0.86 : az + uz * 0.3;
+          const bx = sep > 0.2 ? hiP.x - ux * radiusOf(hi) * 0.99 : ax + ux * 0.3;
+          const bz = sep > 0.2 ? hiP.z - uz * radiusOf(hi) * 0.99 : az + uz * 0.3;
           return makeLadder(Math.hypot(bx - ax, by - ay, bz - az));
         }
         const dh = Math.hypot(b.x - a.x, b.z - a.z) || 1;
-        const inset = (deckRadius(i) + deckRadius(j)) * 0.82;
+        const inset = (radiusOf(i) + radiusOf(j)) * 0.97;
         const ay = a.y + DECK + WALKWAY_RAISE;
         const by = b.y + DECK + WALKWAY_RAISE;
         const span = Math.hypot(Math.max(0.4, dh - inset), by - ay);
         return makeFlatBridge(span);
       }),
-    [edges, anchors, deckRadius],
+    [edges, posOf, radiusOf],
   );
 
   const transforms = useMemo<SpanTransform[]>(() => {
@@ -385,25 +454,37 @@ export function Bridges({
         lanternPosition: new THREE.Vector3(),
       };
 
+      if (i === GROUND || j === GROUND) {
+        const platform = i === GROUND ? j : i;
+        const hiY = posOf(platform).y + DECK + WALKWAY_RAISE;
+        out.position.set(groundPos.x, (groundPos.y + hiY) * 0.5, groundPos.z);
+        // Built along its own Y already matching world-up (ground→platform-0
+        // is near-vertical by construction — see groundPos), so no basis
+        // rotation is needed; stairYaw just picks a facing for the rungs.
+        out.quaternion.setFromAxisAngle(WORLD_UP, stairYaw);
+        out.lanternPosition.set(groundPos.x, hiY + 0.1, groundPos.z);
+        return out;
+      }
+
       if (isLadder) {
-        const lo = anchors[i].pos.y <= anchors[j].pos.y ? i : j;
+        const lo = posOf(i).y <= posOf(j).y ? i : j;
         const hi = lo === i ? j : i;
-        const loP = anchors[lo].pos;
-        const hiP = anchors[hi].pos;
+        const loP = posOf(lo);
+        const hiP = posOf(hi);
         dirH.set(hiP.x - loP.x, 0, hiP.z - loP.z);
         const hd = dirH.length() || 1;
         dirH.normalize();
-        const sep = hd - deckRadius(lo) - deckRadius(hi);
+        const sep = hd - radiusOf(lo) - radiusOf(hi);
         a3.set(
-          loP.x + dirH.x * deckRadius(lo) * 0.86,
+          loP.x + dirH.x * radiusOf(lo) * 0.99,
           loP.y + DECK + WALKWAY_RAISE,
-          loP.z + dirH.z * deckRadius(lo) * 0.86,
+          loP.z + dirH.z * radiusOf(lo) * 0.99,
         );
         if (sep > 0.2) {
           b3.set(
-            hiP.x - dirH.x * deckRadius(hi) * 0.86,
+            hiP.x - dirH.x * radiusOf(hi) * 0.99,
             hiP.y + DECK + WALKWAY_RAISE,
-            hiP.z - dirH.z * deckRadius(hi) * 0.86,
+            hiP.z - dirH.z * radiusOf(hi) * 0.99,
           );
         } else {
           b3.set(
@@ -425,20 +506,20 @@ export function Bridges({
         return out;
       }
 
-      a3.copy(anchors[i].pos);
+      a3.copy(posOf(i));
       a3.y += DECK + WALKWAY_RAISE;
-      b3.copy(anchors[j].pos);
+      b3.copy(posOf(j));
       b3.y += DECK + WALKWAY_RAISE;
       const hd = Math.hypot(b3.x - a3.x, b3.z - a3.z);
-      const inset = deckRadius(i) + deckRadius(j);
+      const inset = radiusOf(i) + radiusOf(j);
       if (hd <= inset + 0.25) {
         out.visible = false;
         out.lanternVisible = false;
         return out;
       }
       dirH.set(b3.x - a3.x, 0, b3.z - a3.z).normalize();
-      a3.addScaledVector(dirH, deckRadius(i) * 0.82);
-      b3.addScaledVector(dirH, -deckRadius(j) * 0.82);
+      a3.addScaledVector(dirH, radiusOf(i) * 0.82);
+      b3.addScaledVector(dirH, -radiusOf(j) * 0.82);
       mid.copy(a3).add(b3).multiplyScalar(0.5);
       dir.copy(b3).sub(a3).normalize();
       axZ.crossVectors(dir, WORLD_UP);
@@ -452,7 +533,7 @@ export function Bridges({
       out.lanternPosition.set(a3.x + dir.x * 0.7, a3.y + 0.05, a3.z + dir.z * 0.7);
       return out;
     });
-  }, [edges, anchors, deckRadius]);
+  }, [edges, posOf, radiusOf, groundPos, stairYaw]);
 
   const refs = useRef<(THREE.Group | null)[]>([]);
   const lanternRefs = useRef<(THREE.Group | null)[]>([]);

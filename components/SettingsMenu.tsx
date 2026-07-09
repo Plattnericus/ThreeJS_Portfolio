@@ -8,6 +8,7 @@ import {
   type GraphicsQuality,
   type ResolvedGraphicsQuality,
 } from "@/lib/quality";
+import { MAX_FOV, MIN_FOV } from "@/lib/cameraBus";
 import { detectLocale, LOCALE_FLAG, LOCALE_LABEL, LOCALES, useI18n, type MsgKey } from "@/lib/i18n";
 import { TrunkRings, WOOD } from "./TrunkRings";
 import {
@@ -419,12 +420,14 @@ export default function SettingsMenu({
   nextSync,
   graphicsQuality,
   resolvedGraphicsQuality,
+  fov,
   open,
   onOpenChange,
   onMode,
   onDate,
   onSky,
   onGraphicsQuality,
+  onFov,
   onReset,
 }: {
   weather: Weather | null;
@@ -439,12 +442,14 @@ export default function SettingsMenu({
   nextSync: number | null;
   graphicsQuality: GraphicsQuality;
   resolvedGraphicsQuality: ResolvedGraphicsQuality;
+  fov: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onMode: (m: "live" | "manual") => void;
   onDate: (d: ManualDate) => void;
   onSky: (s: Sky) => void;
   onGraphicsQuality: (q: GraphicsQuality) => void;
+  onFov: (n: number) => void;
   onReset: () => void;
 }) {
   const { t, setLocale } = useI18n();
@@ -875,6 +880,31 @@ export default function SettingsMenu({
                   }
                   size="text-[10px]"
                 />
+                <label className="flex flex-col gap-1 pt-1.5">
+                  <span
+                    className="flex items-center justify-between text-[10px] font-medium uppercase tracking-[0.12em]"
+                    style={{ color: WOOD.textDim }}
+                  >
+                    {t("settings.fov")}
+                    <span className="tabular-nums" style={{ color: WOOD.text }}>
+                      {fov}°
+                    </span>
+                  </span>
+                  <input
+                    type="range"
+                    min={MIN_FOV}
+                    max={MAX_FOV}
+                    step={1}
+                    value={fov}
+                    onChange={(e) => onFov(Number(e.target.value))}
+                    className="h-1.5 w-full cursor-pointer appearance-none rounded-full"
+                    style={{
+                      background: `linear-gradient(90deg, ${WOOD.accent} ${
+                        ((fov - MIN_FOV) / (MAX_FOV - MIN_FOV)) * 100
+                      }%, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.14) 100%)`,
+                    }}
+                  />
+                </label>
               </div>
 
               {/* 4 — Language (custom dropdown) */}
